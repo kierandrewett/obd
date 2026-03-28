@@ -4,7 +4,7 @@ use crate::obd::{self, Dtc, ObdValue, PidDef};
 use egui::{self, Color32, RichText};
 use std::collections::HashMap;
 use std::io::Write;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 // ── Messages between OBD thread and GUI ─────────────────────────────────────
@@ -143,6 +143,7 @@ pub struct ObdApp {
     log_panel_height: f32,
     log_last_count: usize,
     poll_config: PollConfig,
+    dark_mode: bool,
 
     // PID definitions
     pid_defs: Vec<PidDef>,
@@ -201,6 +202,7 @@ impl ObdApp {
             log_panel_height: 180.0,
             log_last_count: 0,
             poll_config: PollConfig::default(),
+            dark_mode: true,
             pid_defs,
             log_file,
             wake_lock: None,
@@ -243,7 +245,13 @@ impl ObdApp {
                     self.release_wake_lock();
                     self.add_log("[DISCONNECTED]");
                 }
-                ObdEvent::LiveData { pid_cmd, name, value, unit, raw } => {
+                ObdEvent::LiveData {
+                    pid_cmd,
+                    name,
+                    value,
+                    unit,
+                    raw,
+                } => {
                     let numeric = match &value {
                         ObdValue::Numeric(v) => *v,
                         _ => 0.0,
@@ -265,15 +273,18 @@ impl ObdApp {
                         ));
                     }
 
-                    let state = self.live_data.entry(pid_cmd).or_insert_with(|| LivePidState {
-                        name: name.clone(),
-                        value: value.clone(),
-                        unit: unit.clone(),
-                        numeric_value: numeric,
-                        history: Vec::new(),
-                        last_update: Instant::now(),
-                        raw: raw.clone(),
-                    });
+                    let state = self
+                        .live_data
+                        .entry(pid_cmd)
+                        .or_insert_with(|| LivePidState {
+                            name: name.clone(),
+                            value: value.clone(),
+                            unit: unit.clone(),
+                            numeric_value: numeric,
+                            history: Vec::new(),
+                            last_update: Instant::now(),
+                            raw: raw.clone(),
+                        });
                     state.value = value;
                     state.unit = unit;
                     state.numeric_value = numeric;
@@ -289,11 +300,8 @@ impl ObdApp {
                         self.dtc_status = "No trouble codes found".to_string();
                         self.add_log("[DTC_SCAN] No DTCs found");
                     } else {
-                        self.dtc_status = format!(
-                            "{} stored, {} pending",
-                            stored.len(),
-                            pending.len()
-                        );
+                        self.dtc_status =
+                            format!("{} stored, {} pending", stored.len(), pending.len());
                         for dtc in &stored {
                             self.add_log(&format!("[DTC_STORED] code={}", dtc.code));
                         }
@@ -304,7 +312,12 @@ impl ObdApp {
                     self.stored_dtcs = stored;
                     self.pending_dtcs = pending;
                 }
-                ObdEvent::FreezeFrameData { pid_cmd, name, value, unit } => {
+                ObdEvent::FreezeFrameData {
+                    pid_cmd,
+                    name,
+                    value,
+                    unit,
+                } => {
                     self.add_log(&format!(
                         "[FREEZE_FRAME] pid={pid_cmd} name={name} value={value} unit={unit}"
                     ));
@@ -378,11 +391,7 @@ impl ObdApp {
                 // Vehicle info from VIN
                 if let Some(vin) = &self.vin {
                     let summary = crate::vin_decoder::summary(vin);
-                    ui.label(
-                        RichText::new(summary)
-                            .color(Color32::WHITE)
-                            .strong(),
-                    );
+                    ui.label(RichText::new(summary).strong());
                     ui.separator();
                 }
 
@@ -395,7 +404,7 @@ impl ObdApp {
                 }
                 if let Some(v) = &self.voltage {
                     ui.separator();
-                    ui.label(RichText::new(format!("{v}")).color(Color32::from_rgb(80, 160, 220)));
+                    ui.label(RichText::new(v.to_string()).color(Color32::from_rgb(80, 160, 220)));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("Disconnect").clicked() {
@@ -405,17 +414,11 @@ impl ObdApp {
             } else if !self.connecting {
                 // Port selector
                 egui::ComboBox::from_label("")
-                    .selected_text(
-                        self.selected_port.as_deref().unwrap_or("Auto-detect"),
-                    )
+                    .selected_text(self.selected_port.as_deref().unwrap_or("Auto-detect"))
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut self.selected_port, None, "Auto-detect");
                         for port in &self.available_ports {
-                            ui.selectable_value(
-                                &mut self.selected_port,
-                                Some(port.clone()),
-                                port,
-                            );
+                            ui.selectable_value(&mut self.selected_port, Some(port.clone()), port);
                         }
                     });
 
@@ -453,7 +456,9 @@ impl ObdApp {
             for (tab, label) in &tabs {
                 let selected = self.active_tab == *tab;
                 let text = if selected {
-                    RichText::new(*label).strong().color(Color32::from_rgb(80, 160, 220))
+                    RichText::new(*label)
+                        .strong()
+                        .color(Color32::from_rgb(80, 160, 220))
                 } else {
                     RichText::new(*label).color(Color32::from_gray(160))
                 };
@@ -463,12 +468,28 @@ impl ObdApp {
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Theme toggle
+                let theme_label = if self.dark_mode {
+                    RichText::new("Light").color(Color32::from_gray(160))
+                } else {
+                    RichText::new("Dark").color(Color32::from_gray(160))
+                };
+                if ui.selectable_label(false, theme_label).clicked() {
+                    self.dark_mode = !self.dark_mode;
+                }
+
+                ui.separator();
+
+                // Log toggle
                 let log_label = if self.log_panel_open {
                     RichText::new("Log ▼").color(Color32::from_rgb(80, 160, 220))
                 } else {
                     RichText::new("Log ▲").color(Color32::from_gray(160))
                 };
-                if ui.selectable_label(self.log_panel_open, log_label).clicked() {
+                if ui
+                    .selectable_label(self.log_panel_open, log_label)
+                    .clicked()
+                {
                     self.log_panel_open = !self.log_panel_open;
                 }
             });
@@ -501,7 +522,8 @@ impl ObdApp {
                 "--who=OBD Dashboard",
                 "--why=Live OBD polling active",
                 "--mode=block",
-                "sleep", "infinity",
+                "sleep",
+                "infinity",
             ])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -529,12 +551,65 @@ impl ObdApp {
 
     fn show_dashboard(&mut self, ui: &mut egui::Ui) {
         if !self.connected {
-            ui.centered_and_justified(|ui| {
-                ui.label(
-                    RichText::new("Connect to an OBD adapter to see live data")
-                        .color(Color32::from_gray(120))
-                        .size(18.0),
-                );
+            ui.vertical_centered(|ui| {
+                ui.add_space(ui.available_height() * 0.25);
+
+                // Port selector
+                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Port:").color(Color32::from_gray(140)));
+                        egui::ComboBox::from_id_salt("port_select_main")
+                            .width(200.0)
+                            .selected_text(self.selected_port.as_deref().unwrap_or("Auto-detect"))
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut self.selected_port, None, "Auto-detect");
+                                for port in &self.available_ports {
+                                    ui.selectable_value(
+                                        &mut self.selected_port,
+                                        Some(port.clone()),
+                                        port,
+                                    );
+                                }
+                            });
+                        if ui.small_button("Refresh").clicked() {
+                            self.available_ports = crate::elm327::scan_ports();
+                        }
+                    });
+                });
+
+                ui.add_space(12.0);
+
+                let button = egui::Button::new(
+                    RichText::new("Connect")
+                        .size(32.0)
+                        .strong()
+                        .color(Color32::WHITE),
+                )
+                .min_size(egui::vec2(280.0, 80.0))
+                .fill(Color32::from_rgb(40, 120, 200))
+                .corner_radius(12.0);
+
+                if ui.add(button).clicked() {
+                    self.send_cmd(OdbCmd::Connect {
+                        port: self.selected_port.clone(),
+                        baud: self.selected_baud,
+                    });
+                }
+
+                ui.add_space(12.0);
+
+                if self.connecting {
+                    ui.spinner();
+                    ui.label(
+                        RichText::new(&self.connection_status)
+                            .color(Color32::from_rgb(220, 180, 50)),
+                    );
+                } else {
+                    ui.label(
+                        RichText::new("Select a port or auto-detect and connect")
+                            .color(Color32::from_gray(100)),
+                    );
+                }
             });
             return;
         }
@@ -560,43 +635,46 @@ impl ObdApp {
 
                 ui.add_space(16.0);
 
-                // Poll mode selector - centered using columns trick
-                let mode_width = 250.0;
-                let avail = ui.available_width();
-                if avail > mode_width {
-                    ui.add_space(0.0); // force layout
-                }
-                ui.allocate_ui_with_layout(
-                    egui::vec2(mode_width, 24.0),
-                    egui::Layout::left_to_right(egui::Align::Center)
-                        .with_main_justify(true),
-                    |ui| {
+                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                    ui.horizontal(|ui| {
                         ui.label(RichText::new("Mode:").color(Color32::from_gray(140)));
                         let mode = &mut self.poll_config.mode;
-                        if ui.selectable_label(*mode == PollMode::Minimal, "Minimal").clicked() {
+                        if ui
+                            .selectable_label(*mode == PollMode::Minimal, "Minimal")
+                            .clicked()
+                        {
                             *mode = PollMode::Minimal;
                         }
-                        if ui.selectable_label(*mode == PollMode::Fast, "Fast").clicked() {
+                        if ui
+                            .selectable_label(*mode == PollMode::Fast, "Fast")
+                            .clicked()
+                        {
                             *mode = PollMode::Fast;
                         }
-                        if ui.selectable_label(*mode == PollMode::Full, "Full").clicked() {
+                        if ui
+                            .selectable_label(*mode == PollMode::Full, "Full")
+                            .clicked()
+                        {
                             *mode = PollMode::Full;
                         }
-                    },
-                );
+                    });
 
-                ui.add_space(8.0);
-                ui.label(
-                    RichText::new("Select polling mode and press Start")
-                        .color(Color32::from_gray(100)),
-                );
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new("Select polling mode and press Start")
+                            .color(Color32::from_gray(100)),
+                    );
+                });
             });
             return;
         }
 
         // Controls bar when running
         ui.horizontal(|ui| {
-            if ui.button(RichText::new("Stop").color(Color32::from_rgb(220, 50, 50))).clicked() {
+            if ui
+                .button(RichText::new("Stop").color(Color32::from_rgb(220, 50, 50)))
+                .clicked()
+            {
                 self.stop_polling();
             }
 
@@ -605,15 +683,24 @@ impl ObdApp {
             ui.label(RichText::new("Poll:").color(Color32::from_gray(140)));
             let mut changed = false;
             let mode = &mut self.poll_config.mode;
-            if ui.selectable_label(*mode == PollMode::Minimal, "Minimal").clicked() {
+            if ui
+                .selectable_label(*mode == PollMode::Minimal, "Minimal")
+                .clicked()
+            {
                 *mode = PollMode::Minimal;
                 changed = true;
             }
-            if ui.selectable_label(*mode == PollMode::Fast, "Fast").clicked() {
+            if ui
+                .selectable_label(*mode == PollMode::Fast, "Fast")
+                .clicked()
+            {
                 *mode = PollMode::Fast;
                 changed = true;
             }
-            if ui.selectable_label(*mode == PollMode::Full, "Full").clicked() {
+            if ui
+                .selectable_label(*mode == PollMode::Full, "Full")
+                .clicked()
+            {
                 *mode = PollMode::Full;
                 changed = true;
             }
@@ -676,11 +763,51 @@ impl ObdApp {
 
             // ── Second row: 4 smaller gauges ────────────────────────────
             ui.columns(4, |cols| {
-                let gauges: [(usize, &str, &str, f64, f64, &str, Option<f64>, Option<f64>, usize); 4] = [
-                    (0, "0105", "Coolant", -40.0, 215.0, "\u{00B0}C", Some(100.0), Some(115.0), 0),
-                    (1, "015C", "Oil Temp", -40.0, 215.0, "\u{00B0}C", Some(120.0), Some(140.0), 0),
+                let gauges: [(
+                    usize,
+                    &str,
+                    &str,
+                    f64,
+                    f64,
+                    &str,
+                    Option<f64>,
+                    Option<f64>,
+                    usize,
+                ); 4] = [
+                    (
+                        0,
+                        "0105",
+                        "Coolant",
+                        -40.0,
+                        215.0,
+                        "\u{00B0}C",
+                        Some(100.0),
+                        Some(115.0),
+                        0,
+                    ),
+                    (
+                        1,
+                        "015C",
+                        "Oil Temp",
+                        -40.0,
+                        215.0,
+                        "\u{00B0}C",
+                        Some(120.0),
+                        Some(140.0),
+                        0,
+                    ),
                     (2, "0111", "Throttle", 0.0, 100.0, "%", None, None, 1),
-                    (3, "0104", "Load", 0.0, 100.0, "%", Some(80.0), Some(95.0), 1),
+                    (
+                        3,
+                        "0104",
+                        "Load",
+                        0.0,
+                        100.0,
+                        "%",
+                        Some(80.0),
+                        Some(95.0),
+                        1,
+                    ),
                 ];
                 for (i, cmd, label, min, max, unit, warn, danger, dec) in gauges {
                     cols[i].vertical_centered(|ui| {
@@ -688,8 +815,12 @@ impl ObdApp {
                             let mut g = RadialGauge::new(label, s.numeric_value, min, max, unit)
                                 .size(small_gauge)
                                 .decimals(dec);
-                            if let Some(w) = warn { g = g.warning(w); }
-                            if let Some(d) = danger { g = g.danger(d); }
+                            if let Some(w) = warn {
+                                g = g.warning(w);
+                            }
+                            if let Some(d) = danger {
+                                g = g.danger(d);
+                            }
                             g.show(ui);
                         }
                     });
@@ -705,7 +836,11 @@ impl ObdApp {
             ui.columns(2, |cols| {
                 // ── Left: bar gauges ────────────────────────────────────
                 cols[0].vertical(|ui| {
-                    ui.label(RichText::new("Sensors").size(13.0).color(Color32::from_gray(160)));
+                    ui.label(
+                        RichText::new("Sensors")
+                            .size(13.0)
+                            .color(Color32::from_gray(160)),
+                    );
                     ui.add_space(4.0);
 
                     let bar_w = (ui.available_width() - 130.0).max(80.0);
@@ -739,7 +874,11 @@ impl ObdApp {
 
                 // ── Right: sparkline trends ─────────────────────────────
                 cols[1].vertical(|ui| {
-                    ui.label(RichText::new("Trends").size(13.0).color(Color32::from_gray(160)));
+                    ui.label(
+                        RichText::new("Trends")
+                            .size(13.0)
+                            .color(Color32::from_gray(160)),
+                    );
                     ui.add_space(4.0);
 
                     let spark_w = (ui.available_width() - 60.0).max(100.0);
@@ -794,11 +933,9 @@ impl ObdApp {
                 if ui.button("Stop").clicked() {
                     self.stop_polling();
                 }
-            } else {
-                if ui.button("Start").clicked() {
-                    self.start_polling();
-                    self.live_running = true;
-                }
+            } else if ui.button("Start").clicked() {
+                self.start_polling();
+                self.live_running = true;
             }
             if ui.button("Query Supported PIDs").clicked() {
                 self.send_cmd(OdbCmd::QuerySupportedPids);
@@ -809,17 +946,27 @@ impl ObdApp {
         egui::ScrollArea::vertical().show(ui, |ui| {
             egui_extras::TableBuilder::new(ui)
                 .striped(true)
-                .column(egui_extras::Column::exact(70.0))  // PID
+                .column(egui_extras::Column::exact(70.0)) // PID
                 .column(egui_extras::Column::remainder().at_least(200.0)) // Name
                 .column(egui_extras::Column::exact(120.0)) // Value
-                .column(egui_extras::Column::exact(60.0))  // Unit
+                .column(egui_extras::Column::exact(60.0)) // Unit
                 .column(egui_extras::Column::exact(100.0)) // Raw
                 .header(20.0, |mut header| {
-                    header.col(|ui| { ui.strong("PID"); });
-                    header.col(|ui| { ui.strong("Sensor"); });
-                    header.col(|ui| { ui.strong("Value"); });
-                    header.col(|ui| { ui.strong("Unit"); });
-                    header.col(|ui| { ui.strong("Raw"); });
+                    header.col(|ui| {
+                        ui.strong("PID");
+                    });
+                    header.col(|ui| {
+                        ui.strong("Sensor");
+                    });
+                    header.col(|ui| {
+                        ui.strong("Value");
+                    });
+                    header.col(|ui| {
+                        ui.strong("Unit");
+                    });
+                    header.col(|ui| {
+                        ui.strong("Raw");
+                    });
                 })
                 .body(|mut body| {
                     let mut entries: Vec<_> = self.live_data.iter().collect();
@@ -834,18 +981,14 @@ impl ObdApp {
                                         .monospace(),
                                 );
                             });
-                            row.col(|ui| { ui.label(&state.name); });
                             row.col(|ui| {
-                                ui.label(
-                                    RichText::new(format!("{}", state.value))
-                                        .strong()
-                                        .color(Color32::WHITE),
-                                );
+                                ui.label(&state.name);
                             });
                             row.col(|ui| {
-                                ui.label(
-                                    RichText::new(&state.unit).color(Color32::from_gray(140)),
-                                );
+                                ui.label(RichText::new(format!("{}", state.value)).strong());
+                            });
+                            row.col(|ui| {
+                                ui.label(RichText::new(&state.unit).color(Color32::from_gray(140)));
                             });
                             row.col(|ui| {
                                 ui.label(
@@ -880,9 +1023,7 @@ impl ObdApp {
                 self.send_cmd(OdbCmd::ClearDtcs);
             }
             if !self.dtc_status.is_empty() {
-                ui.label(
-                    RichText::new(&self.dtc_status).color(Color32::from_gray(140)),
-                );
+                ui.label(RichText::new(&self.dtc_status).color(Color32::from_gray(140)));
             }
         });
         ui.add_space(8.0);
@@ -929,7 +1070,10 @@ impl ObdApp {
                 }
             }
 
-            if self.stored_dtcs.is_empty() && self.pending_dtcs.is_empty() && !self.dtc_status.is_empty() {
+            if self.stored_dtcs.is_empty()
+                && self.pending_dtcs.is_empty()
+                && !self.dtc_status.is_empty()
+            {
                 ui.label(
                     RichText::new("No trouble codes found")
                         .color(Color32::from_rgb(50, 200, 80))
@@ -966,18 +1110,28 @@ impl ObdApp {
                     .column(egui_extras::Column::exact(120.0))
                     .column(egui_extras::Column::exact(60.0))
                     .header(20.0, |mut header| {
-                        header.col(|ui| { ui.strong("Sensor"); });
-                        header.col(|ui| { ui.strong("Value"); });
-                        header.col(|ui| { ui.strong("Unit"); });
+                        header.col(|ui| {
+                            ui.strong("Sensor");
+                        });
+                        header.col(|ui| {
+                            ui.strong("Value");
+                        });
+                        header.col(|ui| {
+                            ui.strong("Unit");
+                        });
                     })
                     .body(|mut body| {
                         for (name, value, unit) in &self.freeze_data {
                             body.row(18.0, |mut row| {
-                                row.col(|ui| { ui.label(name); });
+                                row.col(|ui| {
+                                    ui.label(name);
+                                });
                                 row.col(|ui| {
                                     ui.label(RichText::new(format!("{value}")).strong());
                                 });
-                                row.col(|ui| { ui.label(unit); });
+                                row.col(|ui| {
+                                    ui.label(unit);
+                                });
                             });
                         }
                     });
@@ -1008,15 +1162,13 @@ impl ObdApp {
             .spacing([20.0, 8.0])
             .show(ui, |ui| {
                 ui.label(RichText::new("VIN:").strong());
-                ui.label(
-                    RichText::new(self.vin.as_deref().unwrap_or("Not read"))
+                ui.label(if self.vin.is_some() {
+                    RichText::new(self.vin.as_deref().unwrap_or("")).monospace()
+                } else {
+                    RichText::new("Not read")
                         .monospace()
-                        .color(if self.vin.is_some() {
-                            Color32::WHITE
-                        } else {
-                            Color32::from_gray(100)
-                        }),
-                );
+                        .color(Color32::from_gray(140))
+                });
                 ui.end_row();
 
                 if let Some(info) = &self.connection_info {
@@ -1049,9 +1201,13 @@ impl ObdApp {
             ui.heading(RichText::new("Supported PIDs").color(Color32::from_gray(180)));
             ui.add_space(4.0);
 
-            let pid_names: HashMap<u8, &str> = self.pid_defs.iter()
+            let pid_names: HashMap<u8, &str> = self
+                .pid_defs
+                .iter()
                 .filter_map(|p| {
-                    u8::from_str_radix(&p.cmd[2..4], 16).ok().map(|pid| (pid, p.description))
+                    u8::from_str_radix(&p.cmd[2..4], 16)
+                        .ok()
+                        .map(|pid| (pid, p.description))
                 })
                 .collect();
 
@@ -1059,13 +1215,14 @@ impl ObdApp {
                 ui.horizontal_wrapped(|ui| {
                     for &pid in &self.supported_pids {
                         let name = pid_names.get(&pid).unwrap_or(&"");
-                        let label = format!("{:02X}", pid);
+                        let label = format!("{pid:02X}");
                         ui.label(
                             RichText::new(label)
                                 .monospace()
                                 .color(Color32::from_rgb(80, 160, 220))
                                 .background_color(Color32::from_gray(30)),
-                        ).on_hover_text(*name);
+                        )
+                        .on_hover_text(*name);
                     }
                 });
             });
@@ -1105,7 +1262,12 @@ impl ObdApp {
                 for i in row_range {
                     if let Some(line) = self.log_messages.get(i) {
                         let color = log_line_color(line);
-                        ui.label(RichText::new(line.as_str()).monospace().color(color).size(10.5));
+                        ui.label(
+                            RichText::new(line.as_str())
+                                .monospace()
+                                .color(color)
+                                .size(10.5),
+                        );
                     }
                 }
             },
@@ -1148,7 +1310,11 @@ impl eframe::App for ObdApp {
         }
 
         // Dark theme
-        ctx.set_visuals(egui::Visuals::dark());
+        if self.dark_mode {
+            ctx.set_visuals(egui::Visuals::dark());
+        } else {
+            ctx.set_visuals(egui::Visuals::light());
+        }
 
         egui::TopBottomPanel::top("connection_bar").show(ctx, |ui| {
             ui.add_space(4.0);
@@ -1171,14 +1337,12 @@ impl eframe::App for ObdApp {
                 });
         }
 
-        egui::CentralPanel::default().show(ctx, |ui| {
-            match self.active_tab {
-                Tab::Dashboard => self.show_dashboard(ui),
-                Tab::Sensors => self.show_sensors(ui),
-                Tab::DtcCodes => self.show_dtcs(ui),
-                Tab::FreezeFrame => self.show_freeze_frame(ui),
-                Tab::VehicleInfo => self.show_vehicle_info(ui),
-            }
+        egui::CentralPanel::default().show(ctx, |ui| match self.active_tab {
+            Tab::Dashboard => self.show_dashboard(ui),
+            Tab::Sensors => self.show_sensors(ui),
+            Tab::DtcCodes => self.show_dtcs(ui),
+            Tab::FreezeFrame => self.show_freeze_frame(ui),
+            Tab::VehicleInfo => self.show_vehicle_info(ui),
         });
     }
 }

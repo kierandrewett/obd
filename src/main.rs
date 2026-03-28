@@ -7,11 +7,11 @@ mod vin_decoder;
 
 use app::{ObdApp, ObdEvent, OdbCmd};
 use obd::PidDef;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 use tracing::{info, warn};
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() {
     // ── Tracing setup (internal/driver logging to stderr) ───────────────────
@@ -62,7 +62,14 @@ fn main() {
     eframe::run_native(
         "OBD-II Dashboard",
         native_options,
-        Box::new(move |cc| Ok(Box::new(ObdApp::new(cc, cmd_tx_clone, event_rx, log_file_clone)))),
+        Box::new(move |cc| {
+            Ok(Box::new(ObdApp::new(
+                cc,
+                cmd_tx_clone,
+                event_rx,
+                log_file_clone,
+            )))
+        }),
     )
     .unwrap();
 
@@ -98,7 +105,8 @@ fn obd_worker(cmd_rx: mpsc::Receiver<OdbCmd>, event_tx: mpsc::Sender<ObdEvent>) 
         if let Some(cmd) = cmd {
             match cmd {
                 OdbCmd::Connect { port, baud } => {
-                    let _ = event_tx.send(ObdEvent::Connecting("Scanning for OBD adapter...".into()));
+                    let _ =
+                        event_tx.send(ObdEvent::Connecting("Scanning for OBD adapter...".into()));
 
                     let progress_tx = event_tx.clone();
                     let progress = move |msg: &str| {
@@ -124,7 +132,9 @@ fn obd_worker(cmd_rx: mpsc::Receiver<OdbCmd>, event_tx: mpsc::Sender<ObdEvent>) 
                                 }
                                 match e.send_logged("0902", Duration::from_secs(5)) {
                                     Ok(lines) => {
-                                        if let Some(vin) = obd::parse_encoded_string_response(&lines, "4902") {
+                                        if let Some(vin) =
+                                            obd::parse_encoded_string_response(&lines, "4902")
+                                        {
                                             let _ = event_tx.send(ObdEvent::Vin(vin));
                                         }
                                     }
@@ -174,7 +184,8 @@ fn obd_worker(cmd_rx: mpsc::Receiver<OdbCmd>, event_tx: mpsc::Sender<ObdEvent>) 
                                 read_dtcs(e, &event_tx);
                             }
                             Err(err) => {
-                                let _ = event_tx.send(ObdEvent::Error(format!("Clear DTCs failed: {err}")));
+                                let _ = event_tx
+                                    .send(ObdEvent::Error(format!("Clear DTCs failed: {err}")));
                             }
                         }
                     }
@@ -190,14 +201,17 @@ fn obd_worker(cmd_rx: mpsc::Receiver<OdbCmd>, event_tx: mpsc::Sender<ObdEvent>) 
                     if let Some(ref mut e) = elm {
                         match e.send_logged("0902", Duration::from_secs(5)) {
                             Ok(lines) => {
-                                if let Some(vin) = obd::parse_encoded_string_response(&lines, "4902") {
+                                if let Some(vin) =
+                                    obd::parse_encoded_string_response(&lines, "4902")
+                                {
                                     let _ = event_tx.send(ObdEvent::Vin(vin));
                                 } else {
                                     let _ = event_tx.send(ObdEvent::Vin("Not available".into()));
                                 }
                             }
                             Err(err) => {
-                                let _ = event_tx.send(ObdEvent::Error(format!("VIN read failed: {err}")));
+                                let _ = event_tx
+                                    .send(ObdEvent::Error(format!("VIN read failed: {err}")));
                             }
                         }
                     }
@@ -371,8 +385,8 @@ fn read_freeze_frame(
 
     // Freeze frame uses Mode 02 with same PIDs as Mode 01, plus frame number suffix
     let freeze_pids = [
-        "0104", "0105", "0106", "0107", "010B", "010C", "010D", "010E", "010F",
-        "0110", "0111", "012F", "0142",
+        "0104", "0105", "0106", "0107", "010B", "010C", "010D", "010E", "010F", "0110", "0111",
+        "012F", "0142",
     ];
 
     for pid01 in &freeze_pids {
@@ -385,12 +399,18 @@ fn read_freeze_frame(
 
         match elm.send_logged(&cmd, Duration::from_secs(3)) {
             Ok(lines) => {
-                // Response prefix is 42XX instead of 41XX
+                // Response prefix is 42XX00 (42 + PID + frame number 00) then data
                 let prefix_42 = format!("42{}", &pid01[2..4]);
                 for line in &lines {
                     let clean = line.replace(' ', "").to_uppercase();
                     if let Some(pos) = clean.find(&prefix_42) {
-                        let data_str = &clean[pos + prefix_42.len()..];
+                        let after_prefix = &clean[pos + prefix_42.len()..];
+                        // Skip frame number byte (2 hex chars = "00")
+                        let data_str = if after_prefix.len() >= 2 {
+                            &after_prefix[2..]
+                        } else {
+                            after_prefix
+                        };
                         let mut bytes = Vec::new();
                         let mut i = 0;
                         while i + 1 < data_str.len() {

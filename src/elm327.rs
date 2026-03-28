@@ -77,12 +77,9 @@ pub fn scan_ports() -> Vec<String> {
     if let Ok(ports) = serialport::available_ports() {
         for port in ports {
             if !found.contains(&port.port_name) {
-                match &port.port_type {
-                    serialport::SerialPortType::UsbPort(usb) => {
-                        info!(port = %port.port_name, vid = usb.vid, pid = usb.pid, "Found USB serial port");
-                        found.push(port.port_name);
-                    }
-                    _ => {}
+                if let serialport::SerialPortType::UsbPort(usb) = &port.port_type {
+                    info!(port = %port.port_name, vid = usb.vid, pid = usb.pid, "Found USB serial port");
+                    found.push(port.port_name);
                 }
             }
         }
@@ -93,9 +90,7 @@ pub fn scan_ports() -> Vec<String> {
 }
 
 /// Try to connect with auto port and baud detection
-pub fn auto_connect(
-    progress: Option<&dyn Fn(&str)>,
-) -> Result<Elm327, Elm327Error> {
+pub fn auto_connect(progress: Option<&dyn Fn(&str)>) -> Result<Elm327, Elm327Error> {
     let ports = scan_ports();
     if ports.is_empty() {
         return Err(Elm327Error::NoPortFound);
@@ -143,10 +138,7 @@ pub fn connect(
     }
 }
 
-fn try_port(
-    port_name: &str,
-    report: &dyn Fn(&str),
-) -> Result<Elm327, Elm327Error> {
+fn try_port(port_name: &str, report: &dyn Fn(&str)) -> Result<Elm327, Elm327Error> {
     for &baud in COMMON_BAUDS {
         report(&format!("  Trying {baud} baud..."));
         match try_port_baud(port_name, baud, report) {
@@ -159,11 +151,7 @@ fn try_port(
     Err(Elm327Error::NoBaudFound(port_name.to_string()))
 }
 
-fn try_port_baud(
-    port_name: &str,
-    baud: u32,
-    report: &dyn Fn(&str),
-) -> Result<Elm327, Elm327Error> {
+fn try_port_baud(port_name: &str, baud: u32, report: &dyn Fn(&str)) -> Result<Elm327, Elm327Error> {
     let mut port = serialport::new(port_name, baud)
         .timeout(Duration::from_secs(3))
         .data_bits(serialport::DataBits::Eight)
@@ -182,12 +170,15 @@ fn try_port_baud(
     let response = read_response(&mut port, Duration::from_secs(3))?;
     debug!(response = ?response, "ATZ response");
 
-    let has_elm = response.iter().any(|l| l.contains("ELM") || l.contains("elm"));
+    let has_elm = response
+        .iter()
+        .any(|l| l.contains("ELM") || l.contains("elm"));
     if !has_elm {
         return Err(Elm327Error::InitFailed("No ELM response to ATZ".into()));
     }
 
-    let elm_version = response.iter()
+    let elm_version = response
+        .iter()
         .find(|l| l.contains("ELM"))
         .cloned()
         .unwrap_or_else(|| "ELM327 (unknown version)".to_string());
@@ -224,7 +215,10 @@ fn try_port_baud(
     let has_data = resp_0100.iter().any(|l| l.starts_with("41"));
     if !has_data {
         let has_error = resp_0100.iter().any(|l| {
-            l.contains("UNABLE") || l.contains("NO DATA") || l.contains("ERROR") || l.contains("BUS INIT")
+            l.contains("UNABLE")
+                || l.contains("NO DATA")
+                || l.contains("ERROR")
+                || l.contains("BUS INIT")
         });
         if has_error {
             return Err(Elm327Error::ProtocolError(
@@ -236,7 +230,8 @@ fn try_port_baud(
     // Get detected protocol
     write_cmd(&mut port, "ATDPN")?;
     let proto_resp = read_response(&mut port, Duration::from_secs(2))?;
-    let protocol = proto_resp.first()
+    let protocol = proto_resp
+        .first()
         .map(|s| decode_protocol(s.trim()))
         .unwrap_or_else(|| "Unknown".to_string());
 
@@ -273,7 +268,11 @@ impl Elm327 {
     }
 
     /// Send command, log the raw exchange
-    pub fn send_logged(&mut self, cmd: &str, timeout: Duration) -> Result<Vec<String>, Elm327Error> {
+    pub fn send_logged(
+        &mut self,
+        cmd: &str,
+        timeout: Duration,
+    ) -> Result<Vec<String>, Elm327Error> {
         let start = Instant::now();
         let lines = self.send(cmd, timeout)?;
         let elapsed = start.elapsed();
@@ -290,7 +289,10 @@ impl Elm327 {
     /// Read battery voltage
     pub fn read_voltage(&mut self) -> Result<String, Elm327Error> {
         let lines = self.send("ATRV", Duration::from_secs(2))?;
-        Ok(lines.into_iter().next().unwrap_or_else(|| "N/A".to_string()))
+        Ok(lines
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| "N/A".to_string()))
     }
 
     /// Check which PIDs are supported in a range
@@ -373,7 +375,7 @@ fn read_response(
     let raw = String::from_utf8_lossy(&buf);
     let lines: Vec<String> = raw
         .split('\r')
-        .map(|s| s.replace('\n', "").replace('>', "").trim().to_string())
+        .map(|s| s.replace(['\n', '>'], "").trim().to_string())
         .filter(|s| !s.is_empty())
         .collect();
 

@@ -2,7 +2,14 @@
 name = "obd-dashboard"
 version = "0.1.0"
 edition = "2024"
-description = "OBD-II diagnostic dashboard with ELM327 support"
+rust-version = "1.85"
+description = "Real-time OBD-II diagnostic dashboard with ELM327 support, built with egui"
+license = "MIT"
+repository = "https://github.com/kierandrewett/obd"
+homepage = "https://github.com/kierandrewett/obd"
+readme = "README.md"
+keywords = ["obd", "obd2", "elm327", "automotive", "diagnostics"]
+categories = ["gui", "hardware-support"]
 
 [dependencies]
 eframe = { version = "0.31", features = ["default"] }
@@ -18,3 +25,4 @@ serde_json = "1"
 [profile.release]
 opt-level = 2
 lto = true
+strip = true

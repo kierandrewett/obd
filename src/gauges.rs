@@ -1,4 +1,68 @@
-use egui::{self, Color32, Pos2, Stroke, Vec2, FontId, Align2};
+use egui::{self, Align2, Color32, FontId, Pos2, Stroke, Vec2};
+
+/// Theme-adaptive colors derived from egui visuals
+struct ThemeColors {
+    gauge_bg: Color32,
+    gauge_border: Color32,
+    tick_major: Color32,
+    tick_mid: Color32,
+    tick_minor: Color32,
+    tick_label: Color32,
+    needle: Color32,
+    needle_shadow: Color32,
+    center_cap: Color32,
+    value_text: Color32,
+    label_text: Color32,
+    bar_bg: Color32,
+    bar_label: Color32,
+    bar_value: Color32,
+    spark_bg: Color32,
+    spark_border: Color32,
+}
+
+impl ThemeColors {
+    fn from_ui(ui: &egui::Ui) -> Self {
+        if ui.visuals().dark_mode {
+            Self {
+                gauge_bg: Color32::from_gray(22),
+                gauge_border: Color32::from_gray(50),
+                tick_major: Color32::from_gray(180),
+                tick_mid: Color32::from_gray(100),
+                tick_minor: Color32::from_gray(60),
+                tick_label: Color32::from_gray(140),
+                needle: Color32::from_gray(230),
+                needle_shadow: Color32::from_black_alpha(80),
+                center_cap: Color32::from_gray(50),
+                value_text: Color32::WHITE,
+                label_text: Color32::from_gray(120),
+                bar_bg: Color32::from_gray(40),
+                bar_label: Color32::from_gray(180),
+                bar_value: Color32::WHITE,
+                spark_bg: Color32::from_gray(20),
+                spark_border: Color32::from_gray(40),
+            }
+        } else {
+            Self {
+                gauge_bg: Color32::from_gray(240),
+                gauge_border: Color32::from_gray(190),
+                tick_major: Color32::from_gray(60),
+                tick_mid: Color32::from_gray(140),
+                tick_minor: Color32::from_gray(190),
+                tick_label: Color32::from_gray(80),
+                needle: Color32::from_gray(30),
+                needle_shadow: Color32::from_black_alpha(30),
+                center_cap: Color32::from_gray(200),
+                value_text: Color32::from_gray(20),
+                label_text: Color32::from_gray(100),
+                bar_bg: Color32::from_gray(215),
+                bar_label: Color32::from_gray(60),
+                bar_value: Color32::from_gray(20),
+                spark_bg: Color32::from_gray(235),
+                spark_border: Color32::from_gray(200),
+            }
+        }
+    }
+}
 
 /// A radial gauge widget (speedometer/tachometer style)
 pub struct RadialGauge<'a> {
@@ -56,13 +120,14 @@ impl<'a> RadialGauge<'a> {
             return response;
         }
 
+        let tc = ThemeColors::from_ui(ui);
         let painter = ui.painter_at(rect);
         let center = rect.center();
         let radius = self.size * 0.42;
 
         // Background circle
-        painter.circle_filled(center, radius + 3.0, Color32::from_gray(22));
-        painter.circle_stroke(center, radius + 3.0, Stroke::new(1.5, Color32::from_gray(50)));
+        painter.circle_filled(center, radius + 3.0, tc.gauge_bg);
+        painter.circle_stroke(center, radius + 3.0, Stroke::new(1.5, tc.gauge_border));
 
         // Arc parameters: sweep from 225 degrees to -45 degrees (270 degree arc)
         let start_angle = 225.0_f32.to_radians();
@@ -90,17 +155,45 @@ impl<'a> RadialGauge<'a> {
             );
 
             // Draw a small quad as two triangles
-            let p0_out = Pos2::new(center.x + arc_outer * a0.cos(), center.y - arc_outer * a0.sin());
-            let p1_out = Pos2::new(center.x + arc_outer * a1.cos(), center.y - arc_outer * a1.sin());
-            let p0_in = Pos2::new(center.x + arc_inner * a0.cos(), center.y - arc_inner * a0.sin());
-            let p1_in = Pos2::new(center.x + arc_inner * a1.cos(), center.y - arc_inner * a1.sin());
+            let p0_out = Pos2::new(
+                center.x + arc_outer * a0.cos(),
+                center.y - arc_outer * a0.sin(),
+            );
+            let p1_out = Pos2::new(
+                center.x + arc_outer * a1.cos(),
+                center.y - arc_outer * a1.sin(),
+            );
+            let p0_in = Pos2::new(
+                center.x + arc_inner * a0.cos(),
+                center.y - arc_inner * a0.sin(),
+            );
+            let p1_in = Pos2::new(
+                center.x + arc_inner * a1.cos(),
+                center.y - arc_inner * a1.sin(),
+            );
 
             let mesh = egui::Mesh {
                 vertices: vec![
-                    egui::epaint::Vertex { pos: p0_out, uv: egui::epaint::WHITE_UV, color: arc_color },
-                    egui::epaint::Vertex { pos: p1_out, uv: egui::epaint::WHITE_UV, color: arc_color },
-                    egui::epaint::Vertex { pos: p1_in, uv: egui::epaint::WHITE_UV, color: arc_color },
-                    egui::epaint::Vertex { pos: p0_in, uv: egui::epaint::WHITE_UV, color: arc_color },
+                    egui::epaint::Vertex {
+                        pos: p0_out,
+                        uv: egui::epaint::WHITE_UV,
+                        color: arc_color,
+                    },
+                    egui::epaint::Vertex {
+                        pos: p1_out,
+                        uv: egui::epaint::WHITE_UV,
+                        color: arc_color,
+                    },
+                    egui::epaint::Vertex {
+                        pos: p1_in,
+                        uv: egui::epaint::WHITE_UV,
+                        color: arc_color,
+                    },
+                    egui::epaint::Vertex {
+                        pos: p0_in,
+                        uv: egui::epaint::WHITE_UV,
+                        color: arc_color,
+                    },
                 ],
                 indices: vec![0, 1, 2, 0, 2, 3],
                 texture_id: egui::TextureId::default(),
@@ -109,7 +202,8 @@ impl<'a> RadialGauge<'a> {
         }
 
         // ── Bright arc up to current value ──────────────────────────────
-        let value_frac = ((self.value.clamp(self.min, self.max) - self.min) / (self.max - self.min)) as f32;
+        let value_frac =
+            ((self.value.clamp(self.min, self.max) - self.min) / (self.max - self.min)) as f32;
         let value_segments = (value_frac * arc_segments as f32) as usize;
         let bright_outer = radius * 0.97;
         let bright_inner = radius * 0.90;
@@ -121,17 +215,45 @@ impl<'a> RadialGauge<'a> {
             let tick_value = self.min + frac0 as f64 * (self.max - self.min);
             let color = self.threshold_color(tick_value);
 
-            let p0_out = Pos2::new(center.x + bright_outer * a0.cos(), center.y - bright_outer * a0.sin());
-            let p1_out = Pos2::new(center.x + bright_outer * a1.cos(), center.y - bright_outer * a1.sin());
-            let p0_in = Pos2::new(center.x + bright_inner * a0.cos(), center.y - bright_inner * a0.sin());
-            let p1_in = Pos2::new(center.x + bright_inner * a1.cos(), center.y - bright_inner * a1.sin());
+            let p0_out = Pos2::new(
+                center.x + bright_outer * a0.cos(),
+                center.y - bright_outer * a0.sin(),
+            );
+            let p1_out = Pos2::new(
+                center.x + bright_outer * a1.cos(),
+                center.y - bright_outer * a1.sin(),
+            );
+            let p0_in = Pos2::new(
+                center.x + bright_inner * a0.cos(),
+                center.y - bright_inner * a0.sin(),
+            );
+            let p1_in = Pos2::new(
+                center.x + bright_inner * a1.cos(),
+                center.y - bright_inner * a1.sin(),
+            );
 
             let mesh = egui::Mesh {
                 vertices: vec![
-                    egui::epaint::Vertex { pos: p0_out, uv: egui::epaint::WHITE_UV, color },
-                    egui::epaint::Vertex { pos: p1_out, uv: egui::epaint::WHITE_UV, color },
-                    egui::epaint::Vertex { pos: p1_in, uv: egui::epaint::WHITE_UV, color },
-                    egui::epaint::Vertex { pos: p0_in, uv: egui::epaint::WHITE_UV, color },
+                    egui::epaint::Vertex {
+                        pos: p0_out,
+                        uv: egui::epaint::WHITE_UV,
+                        color,
+                    },
+                    egui::epaint::Vertex {
+                        pos: p1_out,
+                        uv: egui::epaint::WHITE_UV,
+                        color,
+                    },
+                    egui::epaint::Vertex {
+                        pos: p1_in,
+                        uv: egui::epaint::WHITE_UV,
+                        color,
+                    },
+                    egui::epaint::Vertex {
+                        pos: p0_in,
+                        uv: egui::epaint::WHITE_UV,
+                        color,
+                    },
                 ],
                 indices: vec![0, 1, 2, 0, 2, 3],
                 texture_id: egui::TextureId::default(),
@@ -147,7 +269,11 @@ impl<'a> RadialGauge<'a> {
             let is_major = i % 10 == 0;
             let is_mid = i % 5 == 0;
 
-            let inner = if is_major { radius * 0.78 } else { radius * 0.84 };
+            let inner = if is_major {
+                radius * 0.78
+            } else {
+                radius * 0.84
+            };
             let outer = radius * 0.87;
             let cos = angle.cos();
             let sin = angle.sin();
@@ -155,11 +281,11 @@ impl<'a> RadialGauge<'a> {
             let p2 = Pos2::new(center.x + outer * cos, center.y - outer * sin);
 
             let tick_color = if is_major {
-                Color32::from_gray(180)
+                tc.tick_major
             } else if is_mid {
-                Color32::from_gray(100)
+                tc.tick_mid
             } else {
-                Color32::from_gray(60)
+                tc.tick_minor
             };
             let width = if is_major { 2.0 } else { 1.0 };
             painter.line_segment([p1, p2], Stroke::new(width, tick_color));
@@ -172,14 +298,14 @@ impl<'a> RadialGauge<'a> {
                 let label_text = if self.max >= 1000.0 {
                     format!("{}", label_val as i64)
                 } else {
-                    format!("{:.0}", label_val)
+                    format!("{label_val:.0}")
                 };
                 painter.text(
                     label_pos,
                     Align2::CENTER_CENTER,
                     label_text,
                     FontId::proportional(self.size * 0.065),
-                    Color32::from_gray(140),
+                    tc.tick_label,
                 );
             }
         }
@@ -198,21 +324,21 @@ impl<'a> RadialGauge<'a> {
             if self.value >= danger {
                 Color32::from_rgb(255, 60, 60)
             } else {
-                Color32::from_rgb(230, 230, 230)
+                tc.needle
             }
         } else {
-            Color32::from_rgb(230, 230, 230)
+            tc.needle
         };
 
         // Needle shadow
         let shadow_tip = Pos2::new(needle_tip.x + 1.0, needle_tip.y + 1.0);
         painter.line_segment(
             [Pos2::new(center.x + 1.0, center.y + 1.0), shadow_tip],
-            Stroke::new(3.0, Color32::from_black_alpha(80)),
+            Stroke::new(3.0, tc.needle_shadow),
         );
         painter.line_segment([center, needle_tip], Stroke::new(2.0, needle_color));
         // Center cap
-        painter.circle_filled(center, 5.0, Color32::from_gray(50));
+        painter.circle_filled(center, 5.0, tc.center_cap);
         painter.circle_filled(center, 3.0, needle_color);
 
         // ── Value text ──────────────────────────────────────────────────
@@ -226,7 +352,7 @@ impl<'a> RadialGauge<'a> {
             Align2::CENTER_CENTER,
             format!("{} {}", value_text, self.unit),
             FontId::proportional(self.size * 0.11),
-            Color32::WHITE,
+            tc.value_text,
         );
 
         // Label
@@ -235,7 +361,7 @@ impl<'a> RadialGauge<'a> {
             Align2::CENTER_CENTER,
             self.label,
             FontId::proportional(self.size * 0.07),
-            Color32::from_gray(120),
+            tc.label_text,
         );
 
         response
@@ -310,22 +436,24 @@ impl<'a> BarGauge<'a> {
     }
 
     pub fn show(self, ui: &mut egui::Ui) {
+        let tc = ThemeColors::from_ui(ui);
         let bar_height = 20.0;
 
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new(self.label)
-                    .color(Color32::from_gray(180))
+                    .color(tc.bar_label)
                     .size(13.0),
             );
 
             let frac = ((self.value - self.min) / (self.max - self.min)).clamp(0.0, 1.0) as f32;
 
-            let (rect, _) = ui.allocate_exact_size(Vec2::new(self.width, bar_height), egui::Sense::hover());
+            let (rect, _) =
+                ui.allocate_exact_size(Vec2::new(self.width, bar_height), egui::Sense::hover());
             let painter = ui.painter_at(rect);
 
             // Background
-            painter.rect_filled(rect, 3.0, Color32::from_gray(40));
+            painter.rect_filled(rect, 3.0, tc.bar_bg);
 
             // Fill
             let fill_color = if let Some(danger) = self.danger_threshold {
@@ -358,7 +486,7 @@ impl<'a> BarGauge<'a> {
             };
             ui.label(
                 egui::RichText::new(value_text)
-                    .color(Color32::WHITE)
+                    .color(tc.bar_value)
                     .size(13.0)
                     .strong(),
             );
@@ -372,12 +500,18 @@ pub fn sparkline(ui: &mut egui::Ui, history: &[f64], width: f32, height: f32, co
         return;
     }
 
+    let tc = ThemeColors::from_ui(ui);
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::hover());
     let painter = ui.painter_at(rect);
 
     // Background
-    painter.rect_filled(rect, 3.0, Color32::from_gray(20));
-    painter.rect_stroke(rect, 3.0, Stroke::new(0.5, Color32::from_gray(40)), egui::StrokeKind::Outside);
+    painter.rect_filled(rect, 3.0, tc.spark_bg);
+    painter.rect_stroke(
+        rect,
+        3.0,
+        Stroke::new(0.5, tc.spark_border),
+        egui::StrokeKind::Outside,
+    );
 
     let pad = 2.0;
     let inner_rect = rect.shrink(pad);
@@ -397,19 +531,31 @@ pub fn sparkline(ui: &mut egui::Ui, history: &[f64], width: f32, height: f32, co
         .collect();
 
     // Filled area under the line
-    let fill_color = Color32::from_rgba_premultiplied(
-        color.r() / 4,
-        color.g() / 4,
-        color.b() / 4,
-        60,
-    );
+    let fill_color =
+        Color32::from_rgba_premultiplied(color.r() / 4, color.g() / 4, color.b() / 4, 60);
     for window in points.windows(2) {
         let mesh = egui::Mesh {
             vertices: vec![
-                egui::epaint::Vertex { pos: window[0], uv: egui::epaint::WHITE_UV, color: fill_color },
-                egui::epaint::Vertex { pos: window[1], uv: egui::epaint::WHITE_UV, color: fill_color },
-                egui::epaint::Vertex { pos: Pos2::new(window[1].x, inner_rect.max.y), uv: egui::epaint::WHITE_UV, color: Color32::TRANSPARENT },
-                egui::epaint::Vertex { pos: Pos2::new(window[0].x, inner_rect.max.y), uv: egui::epaint::WHITE_UV, color: Color32::TRANSPARENT },
+                egui::epaint::Vertex {
+                    pos: window[0],
+                    uv: egui::epaint::WHITE_UV,
+                    color: fill_color,
+                },
+                egui::epaint::Vertex {
+                    pos: window[1],
+                    uv: egui::epaint::WHITE_UV,
+                    color: fill_color,
+                },
+                egui::epaint::Vertex {
+                    pos: Pos2::new(window[1].x, inner_rect.max.y),
+                    uv: egui::epaint::WHITE_UV,
+                    color: Color32::TRANSPARENT,
+                },
+                egui::epaint::Vertex {
+                    pos: Pos2::new(window[0].x, inner_rect.max.y),
+                    uv: egui::epaint::WHITE_UV,
+                    color: Color32::TRANSPARENT,
+                },
             ],
             indices: vec![0, 1, 2, 0, 2, 3],
             texture_id: egui::TextureId::default(),

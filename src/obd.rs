@@ -5,13 +5,13 @@ use std::fmt;
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ObdMode {
-    Mode01,     // Live data
-    Mode02,     // Freeze frame
-    Mode03,     // Stored DTCs
-    Mode04,     // Clear DTCs
-    Mode07,     // Pending DTCs
-    Mode09,     // Vehicle info
-    Mode0A,     // Permanent DTCs
+    Mode01, // Live data
+    Mode02, // Freeze frame
+    Mode03, // Stored DTCs
+    Mode04, // Clear DTCs
+    Mode07, // Pending DTCs
+    Mode09, // Vehicle info
+    Mode0A, // Permanent DTCs
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -60,41 +60,41 @@ impl fmt::Display for Unit {
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Decoder {
-    Percent,            // A * 100 / 255
-    PercentCentered,    // (A - 128) * 100 / 128
-    Temp,               // A - 40
-    Rpm,                // (A*256 + B) / 4
-    Speed,              // A
-    TimingAdvance,      // A / 2 - 64
-    Maf,                // (A*256 + B) / 100
-    FuelPressure,       // A * 3
-    Pressure,           // A
-    SensorVoltage,      // A / 200, (B - 128) * 100/128
-    ControlModuleVolt,  // (A*256 + B) / 1000
-    AbsoluteLoad,       // (A*256 + B) * 100 / 255
-    EquivRatio,         // (A*256 + B) / 32768
-    EvapPressure,       // ((A*256) + B) / 4  (signed)
-    AbsEvapPressure,    // (A*256 + B) / 200
-    EvapPressureAlt,    // A*256 + B - 32767
-    InjectTiming,       // ((A*256 + B) / 128) - 210
-    FuelRate,           // (A*256 + B) / 20
-    RunTime,            // A*256 + B
-    DistanceU16,        // A*256 + B
-    MaxMaf,             // A * 10
-    O2WrVoltage,        // ((A*256+B)/32768)*2, ((C*256+D)/256)-128  -> voltage part
-    O2WrCurrent,        // ((A*256+B)/32768)*2, ((C*256+D)/256)-128  -> current part
-    CatalystTemp,       // (A*256 + B) / 10 - 40
-    Count,              // A
-    Pid,                // bitmask
-    Status,             // special
-    FuelStatus,         // special
-    AirStatus,          // special
-    ObdCompliance,      // lookup
-    FuelType,           // lookup
-    SingleDtc,          // special
-    Dtc,                // special
-    EncodedString,      // ASCII
-    Drop,               // ignore
+    Percent,           // A * 100 / 255
+    PercentCentered,   // (A - 128) * 100 / 128
+    Temp,              // A - 40
+    Rpm,               // (A*256 + B) / 4
+    Speed,             // A
+    TimingAdvance,     // A / 2 - 64
+    Maf,               // (A*256 + B) / 100
+    FuelPressure,      // A * 3
+    Pressure,          // A
+    SensorVoltage,     // A / 200, (B - 128) * 100/128
+    ControlModuleVolt, // (A*256 + B) / 1000
+    AbsoluteLoad,      // (A*256 + B) * 100 / 255
+    EquivRatio,        // (A*256 + B) / 32768
+    EvapPressure,      // ((A*256) + B) / 4  (signed)
+    AbsEvapPressure,   // (A*256 + B) / 200
+    EvapPressureAlt,   // A*256 + B - 32767
+    InjectTiming,      // ((A*256 + B) / 128) - 210
+    FuelRate,          // (A*256 + B) / 20
+    RunTime,           // A*256 + B
+    DistanceU16,       // A*256 + B
+    MaxMaf,            // A * 10
+    O2WrVoltage,       // ((A*256+B)/32768)*2, ((C*256+D)/256)-128  -> voltage part
+    O2WrCurrent,       // ((A*256+B)/32768)*2, ((C*256+D)/256)-128  -> current part
+    CatalystTemp,      // (A*256 + B) / 10 - 40
+    Count,             // A
+    Pid,               // bitmask
+    Status,            // special
+    FuelStatus,        // special
+    AirStatus,         // special
+    ObdCompliance,     // lookup
+    FuelType,          // lookup
+    SingleDtc,         // special
+    Dtc,               // special
+    EncodedString,     // ASCII
+    Drop,              // ignore
 }
 
 #[allow(dead_code)]
@@ -115,7 +115,7 @@ pub struct PidDef {
 pub enum ObdValue {
     Numeric(f64),
     Text(String),
-    Supported(Vec<u8>),     // supported PID bitmask
+    Supported(Vec<u8>), // supported PID bitmask
     Dtcs(Vec<Dtc>),
     StatusResult(StatusData),
     NoData,
@@ -159,88 +159,711 @@ pub struct StatusData {
 
 pub fn mode01_pids() -> Vec<PidDef> {
     vec![
-        PidDef { cmd: "0100", name: "PIDS_A", description: "Supported PIDs [01-20]", bytes: 6, decoder: Decoder::Pid, unit: Unit::None, min: 0.0, max: 0.0 },
-        PidDef { cmd: "0101", name: "STATUS", description: "Status since DTCs cleared", bytes: 6, decoder: Decoder::Status, unit: Unit::None, min: 0.0, max: 0.0 },
-        PidDef { cmd: "0102", name: "FREEZE_DTC", description: "DTC that triggered freeze frame", bytes: 4, decoder: Decoder::SingleDtc, unit: Unit::None, min: 0.0, max: 0.0 },
-        PidDef { cmd: "0103", name: "FUEL_STATUS", description: "Fuel System Status", bytes: 4, decoder: Decoder::FuelStatus, unit: Unit::None, min: 0.0, max: 0.0 },
-        PidDef { cmd: "0104", name: "ENGINE_LOAD", description: "Calculated Engine Load", bytes: 3, decoder: Decoder::Percent, unit: Unit::Percent, min: 0.0, max: 100.0 },
-        PidDef { cmd: "0105", name: "COOLANT_TEMP", description: "Engine Coolant Temperature", bytes: 3, decoder: Decoder::Temp, unit: Unit::Celsius, min: -40.0, max: 215.0 },
-        PidDef { cmd: "0106", name: "SHORT_FUEL_TRIM_1", description: "Short Term Fuel Trim - Bank 1", bytes: 3, decoder: Decoder::PercentCentered, unit: Unit::Percent, min: -100.0, max: 99.2 },
-        PidDef { cmd: "0107", name: "LONG_FUEL_TRIM_1", description: "Long Term Fuel Trim - Bank 1", bytes: 3, decoder: Decoder::PercentCentered, unit: Unit::Percent, min: -100.0, max: 99.2 },
-        PidDef { cmd: "0108", name: "SHORT_FUEL_TRIM_2", description: "Short Term Fuel Trim - Bank 2", bytes: 3, decoder: Decoder::PercentCentered, unit: Unit::Percent, min: -100.0, max: 99.2 },
-        PidDef { cmd: "0109", name: "LONG_FUEL_TRIM_2", description: "Long Term Fuel Trim - Bank 2", bytes: 3, decoder: Decoder::PercentCentered, unit: Unit::Percent, min: -100.0, max: 99.2 },
-        PidDef { cmd: "010A", name: "FUEL_PRESSURE", description: "Fuel Pressure", bytes: 3, decoder: Decoder::FuelPressure, unit: Unit::Kpa, min: 0.0, max: 765.0 },
-        PidDef { cmd: "010B", name: "INTAKE_PRESSURE", description: "Intake Manifold Pressure", bytes: 3, decoder: Decoder::Pressure, unit: Unit::Kpa, min: 0.0, max: 255.0 },
-        PidDef { cmd: "010C", name: "RPM", description: "Engine RPM", bytes: 4, decoder: Decoder::Rpm, unit: Unit::Rpm, min: 0.0, max: 16383.75 },
-        PidDef { cmd: "010D", name: "SPEED", description: "Vehicle Speed", bytes: 3, decoder: Decoder::Speed, unit: Unit::Kmh, min: 0.0, max: 255.0 },
-        PidDef { cmd: "010E", name: "TIMING_ADVANCE", description: "Timing Advance", bytes: 3, decoder: Decoder::TimingAdvance, unit: Unit::Degrees, min: -64.0, max: 63.5 },
-        PidDef { cmd: "010F", name: "INTAKE_TEMP", description: "Intake Air Temperature", bytes: 3, decoder: Decoder::Temp, unit: Unit::Celsius, min: -40.0, max: 215.0 },
-        PidDef { cmd: "0110", name: "MAF", description: "Air Flow Rate (MAF)", bytes: 4, decoder: Decoder::Maf, unit: Unit::GramsPerSec, min: 0.0, max: 655.35 },
-        PidDef { cmd: "0111", name: "THROTTLE_POS", description: "Throttle Position", bytes: 3, decoder: Decoder::Percent, unit: Unit::Percent, min: 0.0, max: 100.0 },
-        PidDef { cmd: "0112", name: "AIR_STATUS", description: "Secondary Air Status", bytes: 3, decoder: Decoder::AirStatus, unit: Unit::None, min: 0.0, max: 0.0 },
-        PidDef { cmd: "0114", name: "O2_B1S1", description: "O2: Bank 1 - Sensor 1 Voltage", bytes: 4, decoder: Decoder::SensorVoltage, unit: Unit::Volts, min: 0.0, max: 1.275 },
-        PidDef { cmd: "0115", name: "O2_B1S2", description: "O2: Bank 1 - Sensor 2 Voltage", bytes: 4, decoder: Decoder::SensorVoltage, unit: Unit::Volts, min: 0.0, max: 1.275 },
-        PidDef { cmd: "0116", name: "O2_B1S3", description: "O2: Bank 1 - Sensor 3 Voltage", bytes: 4, decoder: Decoder::SensorVoltage, unit: Unit::Volts, min: 0.0, max: 1.275 },
-        PidDef { cmd: "0117", name: "O2_B1S4", description: "O2: Bank 1 - Sensor 4 Voltage", bytes: 4, decoder: Decoder::SensorVoltage, unit: Unit::Volts, min: 0.0, max: 1.275 },
-        PidDef { cmd: "0118", name: "O2_B2S1", description: "O2: Bank 2 - Sensor 1 Voltage", bytes: 4, decoder: Decoder::SensorVoltage, unit: Unit::Volts, min: 0.0, max: 1.275 },
-        PidDef { cmd: "0119", name: "O2_B2S2", description: "O2: Bank 2 - Sensor 2 Voltage", bytes: 4, decoder: Decoder::SensorVoltage, unit: Unit::Volts, min: 0.0, max: 1.275 },
-        PidDef { cmd: "011C", name: "OBD_COMPLIANCE", description: "OBD Standards Compliance", bytes: 3, decoder: Decoder::ObdCompliance, unit: Unit::None, min: 0.0, max: 0.0 },
-        PidDef { cmd: "011F", name: "RUN_TIME", description: "Engine Run Time", bytes: 4, decoder: Decoder::RunTime, unit: Unit::Seconds, min: 0.0, max: 65535.0 },
-        PidDef { cmd: "0120", name: "PIDS_B", description: "Supported PIDs [21-40]", bytes: 6, decoder: Decoder::Pid, unit: Unit::None, min: 0.0, max: 0.0 },
-        PidDef { cmd: "0121", name: "DISTANCE_W_MIL", description: "Distance Traveled with MIL on", bytes: 4, decoder: Decoder::DistanceU16, unit: Unit::Km, min: 0.0, max: 65535.0 },
-        PidDef { cmd: "0122", name: "FUEL_RAIL_PRESSURE_VAC", description: "Fuel Rail Pressure (relative to vacuum)", bytes: 4, decoder: Decoder::EvapPressure, unit: Unit::Kpa, min: 0.0, max: 5177.265 },
-        PidDef { cmd: "0123", name: "FUEL_RAIL_PRESSURE_DIRECT", description: "Fuel Rail Pressure (direct inject)", bytes: 4, decoder: Decoder::AbsEvapPressure, unit: Unit::Kpa, min: 0.0, max: 655350.0 },
-        PidDef { cmd: "0124", name: "O2_S1_WR_VOLTAGE", description: "O2 Sensor 1 WR Lambda Voltage", bytes: 6, decoder: Decoder::O2WrVoltage, unit: Unit::Volts, min: 0.0, max: 8.0 },
-        PidDef { cmd: "0125", name: "O2_S2_WR_VOLTAGE", description: "O2 Sensor 2 WR Lambda Voltage", bytes: 6, decoder: Decoder::O2WrVoltage, unit: Unit::Volts, min: 0.0, max: 8.0 },
-        PidDef { cmd: "012C", name: "COMMANDED_EGR", description: "Commanded EGR", bytes: 3, decoder: Decoder::Percent, unit: Unit::Percent, min: 0.0, max: 100.0 },
-        PidDef { cmd: "012D", name: "EGR_ERROR", description: "EGR Error", bytes: 3, decoder: Decoder::PercentCentered, unit: Unit::Percent, min: -100.0, max: 99.2 },
-        PidDef { cmd: "012E", name: "EVAPORATIVE_PURGE", description: "Commanded Evaporative Purge", bytes: 3, decoder: Decoder::Percent, unit: Unit::Percent, min: 0.0, max: 100.0 },
-        PidDef { cmd: "012F", name: "FUEL_LEVEL", description: "Fuel Level Input", bytes: 3, decoder: Decoder::Percent, unit: Unit::Percent, min: 0.0, max: 100.0 },
-        PidDef { cmd: "0130", name: "WARMUPS_SINCE_DTC_CLEAR", description: "Warm-ups since codes cleared", bytes: 3, decoder: Decoder::Count, unit: Unit::Count, min: 0.0, max: 255.0 },
-        PidDef { cmd: "0131", name: "DISTANCE_SINCE_DTC_CLEAR", description: "Distance since codes cleared", bytes: 4, decoder: Decoder::DistanceU16, unit: Unit::Km, min: 0.0, max: 65535.0 },
-        PidDef { cmd: "0132", name: "EVAP_VAPOR_PRESSURE", description: "Evap system vapor pressure", bytes: 4, decoder: Decoder::EvapPressure, unit: Unit::Pa, min: -8192.0, max: 8191.75 },
-        PidDef { cmd: "0133", name: "BAROMETRIC_PRESSURE", description: "Barometric Pressure", bytes: 3, decoder: Decoder::Pressure, unit: Unit::Kpa, min: 0.0, max: 255.0 },
-        PidDef { cmd: "0134", name: "O2_S1_WR_CURRENT", description: "O2 Sensor 1 WR Lambda Current", bytes: 6, decoder: Decoder::O2WrCurrent, unit: Unit::Milliamps, min: -128.0, max: 128.0 },
-        PidDef { cmd: "013C", name: "CATALYST_TEMP_B1S1", description: "Catalyst Temp: Bank 1 - Sensor 1", bytes: 4, decoder: Decoder::CatalystTemp, unit: Unit::Celsius, min: -40.0, max: 6513.5 },
-        PidDef { cmd: "013D", name: "CATALYST_TEMP_B2S1", description: "Catalyst Temp: Bank 2 - Sensor 1", bytes: 4, decoder: Decoder::CatalystTemp, unit: Unit::Celsius, min: -40.0, max: 6513.5 },
-        PidDef { cmd: "013E", name: "CATALYST_TEMP_B1S2", description: "Catalyst Temp: Bank 1 - Sensor 2", bytes: 4, decoder: Decoder::CatalystTemp, unit: Unit::Celsius, min: -40.0, max: 6513.5 },
-        PidDef { cmd: "013F", name: "CATALYST_TEMP_B2S2", description: "Catalyst Temp: Bank 2 - Sensor 2", bytes: 4, decoder: Decoder::CatalystTemp, unit: Unit::Celsius, min: -40.0, max: 6513.5 },
-        PidDef { cmd: "0140", name: "PIDS_C", description: "Supported PIDs [41-60]", bytes: 6, decoder: Decoder::Pid, unit: Unit::None, min: 0.0, max: 0.0 },
-        PidDef { cmd: "0142", name: "CONTROL_MODULE_VOLTAGE", description: "Control Module Voltage", bytes: 4, decoder: Decoder::ControlModuleVolt, unit: Unit::Volts, min: 0.0, max: 65.535 },
-        PidDef { cmd: "0143", name: "ABSOLUTE_LOAD", description: "Absolute Load Value", bytes: 4, decoder: Decoder::AbsoluteLoad, unit: Unit::Percent, min: 0.0, max: 25700.0 },
-        PidDef { cmd: "0144", name: "COMMANDED_EQUIV_RATIO", description: "Commanded Equivalence Ratio", bytes: 4, decoder: Decoder::EquivRatio, unit: Unit::Ratio, min: 0.0, max: 2.0 },
-        PidDef { cmd: "0145", name: "RELATIVE_THROTTLE_POS", description: "Relative Throttle Position", bytes: 3, decoder: Decoder::Percent, unit: Unit::Percent, min: 0.0, max: 100.0 },
-        PidDef { cmd: "0146", name: "AMBIENT_AIR_TEMP", description: "Ambient Air Temperature", bytes: 3, decoder: Decoder::Temp, unit: Unit::Celsius, min: -40.0, max: 215.0 },
-        PidDef { cmd: "0147", name: "THROTTLE_POS_B", description: "Absolute Throttle Position B", bytes: 3, decoder: Decoder::Percent, unit: Unit::Percent, min: 0.0, max: 100.0 },
-        PidDef { cmd: "0148", name: "THROTTLE_POS_C", description: "Absolute Throttle Position C", bytes: 3, decoder: Decoder::Percent, unit: Unit::Percent, min: 0.0, max: 100.0 },
-        PidDef { cmd: "0149", name: "ACCELERATOR_POS_D", description: "Accelerator Pedal Position D", bytes: 3, decoder: Decoder::Percent, unit: Unit::Percent, min: 0.0, max: 100.0 },
-        PidDef { cmd: "014A", name: "ACCELERATOR_POS_E", description: "Accelerator Pedal Position E", bytes: 3, decoder: Decoder::Percent, unit: Unit::Percent, min: 0.0, max: 100.0 },
-        PidDef { cmd: "014C", name: "THROTTLE_ACTUATOR", description: "Commanded Throttle Actuator", bytes: 3, decoder: Decoder::Percent, unit: Unit::Percent, min: 0.0, max: 100.0 },
-        PidDef { cmd: "014D", name: "RUN_TIME_MIL", description: "Time Run with MIL on", bytes: 4, decoder: Decoder::RunTime, unit: Unit::Seconds, min: 0.0, max: 65535.0 },
-        PidDef { cmd: "014E", name: "TIME_SINCE_DTC_CLEARED", description: "Time since DTCs cleared", bytes: 4, decoder: Decoder::RunTime, unit: Unit::Seconds, min: 0.0, max: 65535.0 },
-        PidDef { cmd: "0151", name: "FUEL_TYPE", description: "Fuel Type", bytes: 3, decoder: Decoder::FuelType, unit: Unit::None, min: 0.0, max: 0.0 },
-        PidDef { cmd: "0152", name: "ETHANOL_PERCENT", description: "Ethanol Fuel Percent", bytes: 3, decoder: Decoder::Percent, unit: Unit::Percent, min: 0.0, max: 100.0 },
-        PidDef { cmd: "015B", name: "HYBRID_BATTERY_REMAINING", description: "Hybrid Battery Pack Remaining Life", bytes: 3, decoder: Decoder::Percent, unit: Unit::Percent, min: 0.0, max: 100.0 },
-        PidDef { cmd: "015C", name: "OIL_TEMP", description: "Engine Oil Temperature", bytes: 3, decoder: Decoder::Temp, unit: Unit::Celsius, min: -40.0, max: 215.0 },
-        PidDef { cmd: "015D", name: "FUEL_INJECT_TIMING", description: "Fuel Injection Timing", bytes: 4, decoder: Decoder::InjectTiming, unit: Unit::Degrees, min: -210.0, max: 301.992 },
-        PidDef { cmd: "015E", name: "FUEL_RATE", description: "Engine Fuel Rate", bytes: 4, decoder: Decoder::FuelRate, unit: Unit::LitersPerHour, min: 0.0, max: 3276.75 },
+        PidDef {
+            cmd: "0100",
+            name: "PIDS_A",
+            description: "Supported PIDs [01-20]",
+            bytes: 6,
+            decoder: Decoder::Pid,
+            unit: Unit::None,
+            min: 0.0,
+            max: 0.0,
+        },
+        PidDef {
+            cmd: "0101",
+            name: "STATUS",
+            description: "Status since DTCs cleared",
+            bytes: 6,
+            decoder: Decoder::Status,
+            unit: Unit::None,
+            min: 0.0,
+            max: 0.0,
+        },
+        PidDef {
+            cmd: "0102",
+            name: "FREEZE_DTC",
+            description: "DTC that triggered freeze frame",
+            bytes: 4,
+            decoder: Decoder::SingleDtc,
+            unit: Unit::None,
+            min: 0.0,
+            max: 0.0,
+        },
+        PidDef {
+            cmd: "0103",
+            name: "FUEL_STATUS",
+            description: "Fuel System Status",
+            bytes: 4,
+            decoder: Decoder::FuelStatus,
+            unit: Unit::None,
+            min: 0.0,
+            max: 0.0,
+        },
+        PidDef {
+            cmd: "0104",
+            name: "ENGINE_LOAD",
+            description: "Calculated Engine Load",
+            bytes: 3,
+            decoder: Decoder::Percent,
+            unit: Unit::Percent,
+            min: 0.0,
+            max: 100.0,
+        },
+        PidDef {
+            cmd: "0105",
+            name: "COOLANT_TEMP",
+            description: "Engine Coolant Temperature",
+            bytes: 3,
+            decoder: Decoder::Temp,
+            unit: Unit::Celsius,
+            min: -40.0,
+            max: 215.0,
+        },
+        PidDef {
+            cmd: "0106",
+            name: "SHORT_FUEL_TRIM_1",
+            description: "Short Term Fuel Trim - Bank 1",
+            bytes: 3,
+            decoder: Decoder::PercentCentered,
+            unit: Unit::Percent,
+            min: -100.0,
+            max: 99.2,
+        },
+        PidDef {
+            cmd: "0107",
+            name: "LONG_FUEL_TRIM_1",
+            description: "Long Term Fuel Trim - Bank 1",
+            bytes: 3,
+            decoder: Decoder::PercentCentered,
+            unit: Unit::Percent,
+            min: -100.0,
+            max: 99.2,
+        },
+        PidDef {
+            cmd: "0108",
+            name: "SHORT_FUEL_TRIM_2",
+            description: "Short Term Fuel Trim - Bank 2",
+            bytes: 3,
+            decoder: Decoder::PercentCentered,
+            unit: Unit::Percent,
+            min: -100.0,
+            max: 99.2,
+        },
+        PidDef {
+            cmd: "0109",
+            name: "LONG_FUEL_TRIM_2",
+            description: "Long Term Fuel Trim - Bank 2",
+            bytes: 3,
+            decoder: Decoder::PercentCentered,
+            unit: Unit::Percent,
+            min: -100.0,
+            max: 99.2,
+        },
+        PidDef {
+            cmd: "010A",
+            name: "FUEL_PRESSURE",
+            description: "Fuel Pressure",
+            bytes: 3,
+            decoder: Decoder::FuelPressure,
+            unit: Unit::Kpa,
+            min: 0.0,
+            max: 765.0,
+        },
+        PidDef {
+            cmd: "010B",
+            name: "INTAKE_PRESSURE",
+            description: "Intake Manifold Pressure",
+            bytes: 3,
+            decoder: Decoder::Pressure,
+            unit: Unit::Kpa,
+            min: 0.0,
+            max: 255.0,
+        },
+        PidDef {
+            cmd: "010C",
+            name: "RPM",
+            description: "Engine RPM",
+            bytes: 4,
+            decoder: Decoder::Rpm,
+            unit: Unit::Rpm,
+            min: 0.0,
+            max: 16383.75,
+        },
+        PidDef {
+            cmd: "010D",
+            name: "SPEED",
+            description: "Vehicle Speed",
+            bytes: 3,
+            decoder: Decoder::Speed,
+            unit: Unit::Kmh,
+            min: 0.0,
+            max: 255.0,
+        },
+        PidDef {
+            cmd: "010E",
+            name: "TIMING_ADVANCE",
+            description: "Timing Advance",
+            bytes: 3,
+            decoder: Decoder::TimingAdvance,
+            unit: Unit::Degrees,
+            min: -64.0,
+            max: 63.5,
+        },
+        PidDef {
+            cmd: "010F",
+            name: "INTAKE_TEMP",
+            description: "Intake Air Temperature",
+            bytes: 3,
+            decoder: Decoder::Temp,
+            unit: Unit::Celsius,
+            min: -40.0,
+            max: 215.0,
+        },
+        PidDef {
+            cmd: "0110",
+            name: "MAF",
+            description: "Air Flow Rate (MAF)",
+            bytes: 4,
+            decoder: Decoder::Maf,
+            unit: Unit::GramsPerSec,
+            min: 0.0,
+            max: 655.35,
+        },
+        PidDef {
+            cmd: "0111",
+            name: "THROTTLE_POS",
+            description: "Throttle Position",
+            bytes: 3,
+            decoder: Decoder::Percent,
+            unit: Unit::Percent,
+            min: 0.0,
+            max: 100.0,
+        },
+        PidDef {
+            cmd: "0112",
+            name: "AIR_STATUS",
+            description: "Secondary Air Status",
+            bytes: 3,
+            decoder: Decoder::AirStatus,
+            unit: Unit::None,
+            min: 0.0,
+            max: 0.0,
+        },
+        PidDef {
+            cmd: "0114",
+            name: "O2_B1S1",
+            description: "O2: Bank 1 - Sensor 1 Voltage",
+            bytes: 4,
+            decoder: Decoder::SensorVoltage,
+            unit: Unit::Volts,
+            min: 0.0,
+            max: 1.275,
+        },
+        PidDef {
+            cmd: "0115",
+            name: "O2_B1S2",
+            description: "O2: Bank 1 - Sensor 2 Voltage",
+            bytes: 4,
+            decoder: Decoder::SensorVoltage,
+            unit: Unit::Volts,
+            min: 0.0,
+            max: 1.275,
+        },
+        PidDef {
+            cmd: "0116",
+            name: "O2_B1S3",
+            description: "O2: Bank 1 - Sensor 3 Voltage",
+            bytes: 4,
+            decoder: Decoder::SensorVoltage,
+            unit: Unit::Volts,
+            min: 0.0,
+            max: 1.275,
+        },
+        PidDef {
+            cmd: "0117",
+            name: "O2_B1S4",
+            description: "O2: Bank 1 - Sensor 4 Voltage",
+            bytes: 4,
+            decoder: Decoder::SensorVoltage,
+            unit: Unit::Volts,
+            min: 0.0,
+            max: 1.275,
+        },
+        PidDef {
+            cmd: "0118",
+            name: "O2_B2S1",
+            description: "O2: Bank 2 - Sensor 1 Voltage",
+            bytes: 4,
+            decoder: Decoder::SensorVoltage,
+            unit: Unit::Volts,
+            min: 0.0,
+            max: 1.275,
+        },
+        PidDef {
+            cmd: "0119",
+            name: "O2_B2S2",
+            description: "O2: Bank 2 - Sensor 2 Voltage",
+            bytes: 4,
+            decoder: Decoder::SensorVoltage,
+            unit: Unit::Volts,
+            min: 0.0,
+            max: 1.275,
+        },
+        PidDef {
+            cmd: "011C",
+            name: "OBD_COMPLIANCE",
+            description: "OBD Standards Compliance",
+            bytes: 3,
+            decoder: Decoder::ObdCompliance,
+            unit: Unit::None,
+            min: 0.0,
+            max: 0.0,
+        },
+        PidDef {
+            cmd: "011F",
+            name: "RUN_TIME",
+            description: "Engine Run Time",
+            bytes: 4,
+            decoder: Decoder::RunTime,
+            unit: Unit::Seconds,
+            min: 0.0,
+            max: 65535.0,
+        },
+        PidDef {
+            cmd: "0120",
+            name: "PIDS_B",
+            description: "Supported PIDs [21-40]",
+            bytes: 6,
+            decoder: Decoder::Pid,
+            unit: Unit::None,
+            min: 0.0,
+            max: 0.0,
+        },
+        PidDef {
+            cmd: "0121",
+            name: "DISTANCE_W_MIL",
+            description: "Distance Traveled with MIL on",
+            bytes: 4,
+            decoder: Decoder::DistanceU16,
+            unit: Unit::Km,
+            min: 0.0,
+            max: 65535.0,
+        },
+        PidDef {
+            cmd: "0122",
+            name: "FUEL_RAIL_PRESSURE_VAC",
+            description: "Fuel Rail Pressure (relative to vacuum)",
+            bytes: 4,
+            decoder: Decoder::EvapPressure,
+            unit: Unit::Kpa,
+            min: 0.0,
+            max: 5177.265,
+        },
+        PidDef {
+            cmd: "0123",
+            name: "FUEL_RAIL_PRESSURE_DIRECT",
+            description: "Fuel Rail Pressure (direct inject)",
+            bytes: 4,
+            decoder: Decoder::AbsEvapPressure,
+            unit: Unit::Kpa,
+            min: 0.0,
+            max: 655350.0,
+        },
+        PidDef {
+            cmd: "0124",
+            name: "O2_S1_WR_VOLTAGE",
+            description: "O2 Sensor 1 WR Lambda Voltage",
+            bytes: 6,
+            decoder: Decoder::O2WrVoltage,
+            unit: Unit::Volts,
+            min: 0.0,
+            max: 8.0,
+        },
+        PidDef {
+            cmd: "0125",
+            name: "O2_S2_WR_VOLTAGE",
+            description: "O2 Sensor 2 WR Lambda Voltage",
+            bytes: 6,
+            decoder: Decoder::O2WrVoltage,
+            unit: Unit::Volts,
+            min: 0.0,
+            max: 8.0,
+        },
+        PidDef {
+            cmd: "012C",
+            name: "COMMANDED_EGR",
+            description: "Commanded EGR",
+            bytes: 3,
+            decoder: Decoder::Percent,
+            unit: Unit::Percent,
+            min: 0.0,
+            max: 100.0,
+        },
+        PidDef {
+            cmd: "012D",
+            name: "EGR_ERROR",
+            description: "EGR Error",
+            bytes: 3,
+            decoder: Decoder::PercentCentered,
+            unit: Unit::Percent,
+            min: -100.0,
+            max: 99.2,
+        },
+        PidDef {
+            cmd: "012E",
+            name: "EVAPORATIVE_PURGE",
+            description: "Commanded Evaporative Purge",
+            bytes: 3,
+            decoder: Decoder::Percent,
+            unit: Unit::Percent,
+            min: 0.0,
+            max: 100.0,
+        },
+        PidDef {
+            cmd: "012F",
+            name: "FUEL_LEVEL",
+            description: "Fuel Level Input",
+            bytes: 3,
+            decoder: Decoder::Percent,
+            unit: Unit::Percent,
+            min: 0.0,
+            max: 100.0,
+        },
+        PidDef {
+            cmd: "0130",
+            name: "WARMUPS_SINCE_DTC_CLEAR",
+            description: "Warm-ups since codes cleared",
+            bytes: 3,
+            decoder: Decoder::Count,
+            unit: Unit::Count,
+            min: 0.0,
+            max: 255.0,
+        },
+        PidDef {
+            cmd: "0131",
+            name: "DISTANCE_SINCE_DTC_CLEAR",
+            description: "Distance since codes cleared",
+            bytes: 4,
+            decoder: Decoder::DistanceU16,
+            unit: Unit::Km,
+            min: 0.0,
+            max: 65535.0,
+        },
+        PidDef {
+            cmd: "0132",
+            name: "EVAP_VAPOR_PRESSURE",
+            description: "Evap system vapor pressure",
+            bytes: 4,
+            decoder: Decoder::EvapPressure,
+            unit: Unit::Pa,
+            min: -8192.0,
+            max: 8191.75,
+        },
+        PidDef {
+            cmd: "0133",
+            name: "BAROMETRIC_PRESSURE",
+            description: "Barometric Pressure",
+            bytes: 3,
+            decoder: Decoder::Pressure,
+            unit: Unit::Kpa,
+            min: 0.0,
+            max: 255.0,
+        },
+        PidDef {
+            cmd: "0134",
+            name: "O2_S1_WR_CURRENT",
+            description: "O2 Sensor 1 WR Lambda Current",
+            bytes: 6,
+            decoder: Decoder::O2WrCurrent,
+            unit: Unit::Milliamps,
+            min: -128.0,
+            max: 128.0,
+        },
+        PidDef {
+            cmd: "013C",
+            name: "CATALYST_TEMP_B1S1",
+            description: "Catalyst Temp: Bank 1 - Sensor 1",
+            bytes: 4,
+            decoder: Decoder::CatalystTemp,
+            unit: Unit::Celsius,
+            min: -40.0,
+            max: 6513.5,
+        },
+        PidDef {
+            cmd: "013D",
+            name: "CATALYST_TEMP_B2S1",
+            description: "Catalyst Temp: Bank 2 - Sensor 1",
+            bytes: 4,
+            decoder: Decoder::CatalystTemp,
+            unit: Unit::Celsius,
+            min: -40.0,
+            max: 6513.5,
+        },
+        PidDef {
+            cmd: "013E",
+            name: "CATALYST_TEMP_B1S2",
+            description: "Catalyst Temp: Bank 1 - Sensor 2",
+            bytes: 4,
+            decoder: Decoder::CatalystTemp,
+            unit: Unit::Celsius,
+            min: -40.0,
+            max: 6513.5,
+        },
+        PidDef {
+            cmd: "013F",
+            name: "CATALYST_TEMP_B2S2",
+            description: "Catalyst Temp: Bank 2 - Sensor 2",
+            bytes: 4,
+            decoder: Decoder::CatalystTemp,
+            unit: Unit::Celsius,
+            min: -40.0,
+            max: 6513.5,
+        },
+        PidDef {
+            cmd: "0140",
+            name: "PIDS_C",
+            description: "Supported PIDs [41-60]",
+            bytes: 6,
+            decoder: Decoder::Pid,
+            unit: Unit::None,
+            min: 0.0,
+            max: 0.0,
+        },
+        PidDef {
+            cmd: "0142",
+            name: "CONTROL_MODULE_VOLTAGE",
+            description: "Control Module Voltage",
+            bytes: 4,
+            decoder: Decoder::ControlModuleVolt,
+            unit: Unit::Volts,
+            min: 0.0,
+            max: 65.535,
+        },
+        PidDef {
+            cmd: "0143",
+            name: "ABSOLUTE_LOAD",
+            description: "Absolute Load Value",
+            bytes: 4,
+            decoder: Decoder::AbsoluteLoad,
+            unit: Unit::Percent,
+            min: 0.0,
+            max: 25700.0,
+        },
+        PidDef {
+            cmd: "0144",
+            name: "COMMANDED_EQUIV_RATIO",
+            description: "Commanded Equivalence Ratio",
+            bytes: 4,
+            decoder: Decoder::EquivRatio,
+            unit: Unit::Ratio,
+            min: 0.0,
+            max: 2.0,
+        },
+        PidDef {
+            cmd: "0145",
+            name: "RELATIVE_THROTTLE_POS",
+            description: "Relative Throttle Position",
+            bytes: 3,
+            decoder: Decoder::Percent,
+            unit: Unit::Percent,
+            min: 0.0,
+            max: 100.0,
+        },
+        PidDef {
+            cmd: "0146",
+            name: "AMBIENT_AIR_TEMP",
+            description: "Ambient Air Temperature",
+            bytes: 3,
+            decoder: Decoder::Temp,
+            unit: Unit::Celsius,
+            min: -40.0,
+            max: 215.0,
+        },
+        PidDef {
+            cmd: "0147",
+            name: "THROTTLE_POS_B",
+            description: "Absolute Throttle Position B",
+            bytes: 3,
+            decoder: Decoder::Percent,
+            unit: Unit::Percent,
+            min: 0.0,
+            max: 100.0,
+        },
+        PidDef {
+            cmd: "0148",
+            name: "THROTTLE_POS_C",
+            description: "Absolute Throttle Position C",
+            bytes: 3,
+            decoder: Decoder::Percent,
+            unit: Unit::Percent,
+            min: 0.0,
+            max: 100.0,
+        },
+        PidDef {
+            cmd: "0149",
+            name: "ACCELERATOR_POS_D",
+            description: "Accelerator Pedal Position D",
+            bytes: 3,
+            decoder: Decoder::Percent,
+            unit: Unit::Percent,
+            min: 0.0,
+            max: 100.0,
+        },
+        PidDef {
+            cmd: "014A",
+            name: "ACCELERATOR_POS_E",
+            description: "Accelerator Pedal Position E",
+            bytes: 3,
+            decoder: Decoder::Percent,
+            unit: Unit::Percent,
+            min: 0.0,
+            max: 100.0,
+        },
+        PidDef {
+            cmd: "014C",
+            name: "THROTTLE_ACTUATOR",
+            description: "Commanded Throttle Actuator",
+            bytes: 3,
+            decoder: Decoder::Percent,
+            unit: Unit::Percent,
+            min: 0.0,
+            max: 100.0,
+        },
+        PidDef {
+            cmd: "014D",
+            name: "RUN_TIME_MIL",
+            description: "Time Run with MIL on",
+            bytes: 4,
+            decoder: Decoder::RunTime,
+            unit: Unit::Seconds,
+            min: 0.0,
+            max: 65535.0,
+        },
+        PidDef {
+            cmd: "014E",
+            name: "TIME_SINCE_DTC_CLEARED",
+            description: "Time since DTCs cleared",
+            bytes: 4,
+            decoder: Decoder::RunTime,
+            unit: Unit::Seconds,
+            min: 0.0,
+            max: 65535.0,
+        },
+        PidDef {
+            cmd: "0151",
+            name: "FUEL_TYPE",
+            description: "Fuel Type",
+            bytes: 3,
+            decoder: Decoder::FuelType,
+            unit: Unit::None,
+            min: 0.0,
+            max: 0.0,
+        },
+        PidDef {
+            cmd: "0152",
+            name: "ETHANOL_PERCENT",
+            description: "Ethanol Fuel Percent",
+            bytes: 3,
+            decoder: Decoder::Percent,
+            unit: Unit::Percent,
+            min: 0.0,
+            max: 100.0,
+        },
+        PidDef {
+            cmd: "015B",
+            name: "HYBRID_BATTERY_REMAINING",
+            description: "Hybrid Battery Pack Remaining Life",
+            bytes: 3,
+            decoder: Decoder::Percent,
+            unit: Unit::Percent,
+            min: 0.0,
+            max: 100.0,
+        },
+        PidDef {
+            cmd: "015C",
+            name: "OIL_TEMP",
+            description: "Engine Oil Temperature",
+            bytes: 3,
+            decoder: Decoder::Temp,
+            unit: Unit::Celsius,
+            min: -40.0,
+            max: 215.0,
+        },
+        PidDef {
+            cmd: "015D",
+            name: "FUEL_INJECT_TIMING",
+            description: "Fuel Injection Timing",
+            bytes: 4,
+            decoder: Decoder::InjectTiming,
+            unit: Unit::Degrees,
+            min: -210.0,
+            max: 301.992,
+        },
+        PidDef {
+            cmd: "015E",
+            name: "FUEL_RATE",
+            description: "Engine Fuel Rate",
+            bytes: 4,
+            decoder: Decoder::FuelRate,
+            unit: Unit::LitersPerHour,
+            min: 0.0,
+            max: 3276.75,
+        },
     ]
 }
 
 #[allow(dead_code)]
 pub fn mode09_pids() -> Vec<PidDef> {
     vec![
-        PidDef { cmd: "0900", name: "PIDS_9A", description: "Supported PIDs [01-20]", bytes: 7, decoder: Decoder::Pid, unit: Unit::None, min: 0.0, max: 0.0 },
-        PidDef { cmd: "0902", name: "VIN", description: "Vehicle Identification Number", bytes: 22, decoder: Decoder::EncodedString, unit: Unit::None, min: 0.0, max: 0.0 },
-        PidDef { cmd: "0904", name: "CALIBRATION_ID", description: "Calibration ID", bytes: 18, decoder: Decoder::EncodedString, unit: Unit::None, min: 0.0, max: 0.0 },
-        PidDef { cmd: "090A", name: "ECU_NAME", description: "ECU Name", bytes: 22, decoder: Decoder::EncodedString, unit: Unit::None, min: 0.0, max: 0.0 },
+        PidDef {
+            cmd: "0900",
+            name: "PIDS_9A",
+            description: "Supported PIDs [01-20]",
+            bytes: 7,
+            decoder: Decoder::Pid,
+            unit: Unit::None,
+            min: 0.0,
+            max: 0.0,
+        },
+        PidDef {
+            cmd: "0902",
+            name: "VIN",
+            description: "Vehicle Identification Number",
+            bytes: 22,
+            decoder: Decoder::EncodedString,
+            unit: Unit::None,
+            min: 0.0,
+            max: 0.0,
+        },
+        PidDef {
+            cmd: "0904",
+            name: "CALIBRATION_ID",
+            description: "Calibration ID",
+            bytes: 18,
+            decoder: Decoder::EncodedString,
+            unit: Unit::None,
+            min: 0.0,
+            max: 0.0,
+        },
+        PidDef {
+            cmd: "090A",
+            name: "ECU_NAME",
+            description: "ECU Name",
+            bytes: 22,
+            decoder: Decoder::EncodedString,
+            unit: Unit::None,
+            min: 0.0,
+            max: 0.0,
+        },
     ]
 }
 
 /// PIDs that are good for dashboard gauges
 #[allow(dead_code)]
 pub fn gauge_pids() -> Vec<&'static str> {
-    vec!["010C", "010D", "0105", "0111", "0104", "015C", "012F", "0142"]
+    vec![
+        "010C", "010D", "0105", "0111", "0104", "015C", "012F", "0142",
+    ]
 }
 
 // ── Decoding functions ──────────────────────────────────────────────────────
@@ -263,113 +886,133 @@ pub fn decode_pid(pid: &PidDef, data: &[u8]) -> ObdValue {
             ObdValue::Numeric(a - 40.0)
         }
         Decoder::Rpm => {
-            if data.len() < 2 { return ObdValue::NoData; }
+            if data.len() < 2 {
+                return ObdValue::NoData;
+            }
             let a = data[0] as f64;
             let b = data[1] as f64;
             ObdValue::Numeric((a * 256.0 + b) / 4.0)
         }
-        Decoder::Speed => {
-            ObdValue::Numeric(data[0] as f64)
-        }
+        Decoder::Speed => ObdValue::Numeric(data[0] as f64),
         Decoder::TimingAdvance => {
             let a = data[0] as f64;
             ObdValue::Numeric(a / 2.0 - 64.0)
         }
         Decoder::Maf => {
-            if data.len() < 2 { return ObdValue::NoData; }
+            if data.len() < 2 {
+                return ObdValue::NoData;
+            }
             let a = data[0] as f64;
             let b = data[1] as f64;
             ObdValue::Numeric((a * 256.0 + b) / 100.0)
         }
-        Decoder::FuelPressure => {
-            ObdValue::Numeric(data[0] as f64 * 3.0)
-        }
-        Decoder::Pressure => {
-            ObdValue::Numeric(data[0] as f64)
-        }
+        Decoder::FuelPressure => ObdValue::Numeric(data[0] as f64 * 3.0),
+        Decoder::Pressure => ObdValue::Numeric(data[0] as f64),
         Decoder::SensorVoltage => {
             let a = data[0] as f64;
             ObdValue::Numeric(a / 200.0)
         }
         Decoder::ControlModuleVolt => {
-            if data.len() < 2 { return ObdValue::NoData; }
+            if data.len() < 2 {
+                return ObdValue::NoData;
+            }
             let a = data[0] as f64;
             let b = data[1] as f64;
             ObdValue::Numeric((a * 256.0 + b) / 1000.0)
         }
         Decoder::AbsoluteLoad => {
-            if data.len() < 2 { return ObdValue::NoData; }
+            if data.len() < 2 {
+                return ObdValue::NoData;
+            }
             let a = data[0] as f64;
             let b = data[1] as f64;
             ObdValue::Numeric((a * 256.0 + b) * 100.0 / 255.0)
         }
         Decoder::EquivRatio => {
-            if data.len() < 2 { return ObdValue::NoData; }
+            if data.len() < 2 {
+                return ObdValue::NoData;
+            }
             let a = data[0] as f64;
             let b = data[1] as f64;
             ObdValue::Numeric((a * 256.0 + b) / 32768.0)
         }
         Decoder::EvapPressure => {
-            if data.len() < 2 { return ObdValue::NoData; }
+            if data.len() < 2 {
+                return ObdValue::NoData;
+            }
             let raw = (data[0] as i16) * 256 + data[1] as i16;
             ObdValue::Numeric(raw as f64 / 4.0)
         }
         Decoder::AbsEvapPressure => {
-            if data.len() < 2 { return ObdValue::NoData; }
+            if data.len() < 2 {
+                return ObdValue::NoData;
+            }
             let a = data[0] as f64;
             let b = data[1] as f64;
             ObdValue::Numeric((a * 256.0 + b) / 200.0)
         }
         Decoder::EvapPressureAlt => {
-            if data.len() < 2 { return ObdValue::NoData; }
+            if data.len() < 2 {
+                return ObdValue::NoData;
+            }
             let a = data[0] as f64;
             let b = data[1] as f64;
             ObdValue::Numeric(a * 256.0 + b - 32767.0)
         }
         Decoder::InjectTiming => {
-            if data.len() < 2 { return ObdValue::NoData; }
+            if data.len() < 2 {
+                return ObdValue::NoData;
+            }
             let a = data[0] as f64;
             let b = data[1] as f64;
             ObdValue::Numeric((a * 256.0 + b) / 128.0 - 210.0)
         }
         Decoder::FuelRate => {
-            if data.len() < 2 { return ObdValue::NoData; }
+            if data.len() < 2 {
+                return ObdValue::NoData;
+            }
             let a = data[0] as f64;
             let b = data[1] as f64;
             ObdValue::Numeric((a * 256.0 + b) / 20.0)
         }
         Decoder::RunTime | Decoder::DistanceU16 => {
-            if data.len() < 2 { return ObdValue::NoData; }
+            if data.len() < 2 {
+                return ObdValue::NoData;
+            }
             let a = data[0] as f64;
             let b = data[1] as f64;
             ObdValue::Numeric(a * 256.0 + b)
         }
-        Decoder::MaxMaf => {
-            ObdValue::Numeric(data[0] as f64 * 10.0)
-        }
+        Decoder::MaxMaf => ObdValue::Numeric(data[0] as f64 * 10.0),
         Decoder::O2WrVoltage => {
-            if data.len() < 4 { return ObdValue::NoData; }
+            if data.len() < 4 {
+                return ObdValue::NoData;
+            }
             let c = data[2] as f64;
             let d = data[3] as f64;
             ObdValue::Numeric((c * 256.0 + d) * 8.0 / 65536.0)
         }
         Decoder::O2WrCurrent => {
-            if data.len() < 4 { return ObdValue::NoData; }
+            if data.len() < 4 {
+                return ObdValue::NoData;
+            }
             let c = data[2] as f64;
             let d = data[3] as f64;
             ObdValue::Numeric((c * 256.0 + d) / 256.0 - 128.0)
         }
         Decoder::CatalystTemp => {
-            if data.len() < 2 { return ObdValue::NoData; }
+            if data.len() < 2 {
+                return ObdValue::NoData;
+            }
             let a = data[0] as f64;
             let b = data[1] as f64;
             ObdValue::Numeric((a * 256.0 + b) / 10.0 - 40.0)
         }
-        Decoder::Count => {
-            ObdValue::Numeric(data[0] as f64)
-        }
+        Decoder::Count => ObdValue::Numeric(data[0] as f64),
         Decoder::Pid => {
-            if data.len() < 4 { return ObdValue::NoData; }
+            if data.len() < 4 {
+                return ObdValue::NoData;
+            }
             let bits = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
             let base_pid = u8::from_str_radix(&pid.cmd[2..4], 16).unwrap_or(0);
             let mut supported = Vec::new();
@@ -381,7 +1024,9 @@ pub fn decode_pid(pid: &PidDef, data: &[u8]) -> ObdValue {
             ObdValue::Supported(supported)
         }
         Decoder::Status => {
-            if data.len() < 4 { return ObdValue::NoData; }
+            if data.len() < 4 {
+                return ObdValue::NoData;
+            }
             let mil_on = (data[0] & 0x80) != 0;
             let dtc_count = data[0] & 0x7F;
             let ignition_type = if (data[1] & 0x08) != 0 {
@@ -389,7 +1034,11 @@ pub fn decode_pid(pid: &PidDef, data: &[u8]) -> ObdValue {
             } else {
                 "Spark (Gasoline)".to_string()
             };
-            ObdValue::StatusResult(StatusData { mil_on, dtc_count, ignition_type })
+            ObdValue::StatusResult(StatusData {
+                mil_on,
+                dtc_count,
+                ignition_type,
+            })
         }
         Decoder::FuelStatus => {
             let status = match data[0] {
@@ -462,19 +1111,20 @@ pub fn decode_pid(pid: &PidDef, data: &[u8]) -> ObdValue {
             ObdValue::Text(s.to_string())
         }
         Decoder::SingleDtc => {
-            if data.len() < 2 { return ObdValue::NoData; }
+            if data.len() < 2 {
+                return ObdValue::NoData;
+            }
             if data[0] == 0 && data[1] == 0 {
                 return ObdValue::Text("No freeze frame DTC".to_string());
             }
             let code = decode_dtc_bytes(data[0], data[1]);
             ObdValue::Text(code)
         }
-        Decoder::Dtc => {
-            ObdValue::Dtcs(decode_dtc_response(data))
-        }
+        Decoder::Dtc => ObdValue::Dtcs(decode_dtc_response(data)),
         Decoder::EncodedString => {
-            let s: String = data.iter()
-                .filter(|&&b| b >= 0x20 && b < 0x7F)
+            let s: String = data
+                .iter()
+                .filter(|&&b| (0x20..0x7F).contains(&b))
                 .map(|&b| b as char)
                 .collect();
             ObdValue::Text(s.trim().to_string())
@@ -497,7 +1147,7 @@ pub fn decode_dtc_bytes(b1: u8, b2: u8) -> String {
     let d2 = b1 & 0x0F;
     let d3 = (b2 >> 4) & 0x0F;
     let d4 = b2 & 0x0F;
-    format!("{}{}{:X}{:X}{:X}", prefix, d1, d2, d3, d4)
+    format!("{prefix}{d1}{d2:X}{d3:X}{d4:X}")
 }
 
 pub fn decode_dtc_response(data: &[u8]) -> Vec<Dtc> {
@@ -522,11 +1172,15 @@ pub fn decode_dtc_response(data: &[u8]) -> Vec<Dtc> {
 pub fn parse_elm_response(cmd: &str, lines: &[String]) -> Option<Vec<u8>> {
     let mode_response = format!("4{}", &cmd[1..2]);
     let pid_hex = &cmd[2..4];
-    let prefix = format!("{}{}", mode_response, pid_hex).to_uppercase();
+    let prefix = format!("{mode_response}{pid_hex}").to_uppercase();
 
     for line in lines {
         let clean = line.replace(' ', "").to_uppercase();
-        if clean.starts_with("NODATA") || clean.starts_with("ERROR") || clean.starts_with("?") || clean.starts_with("UNABLE") {
+        if clean.starts_with("NODATA")
+            || clean.starts_with("ERROR")
+            || clean.starts_with("?")
+            || clean.starts_with("UNABLE")
+        {
             return None;
         }
         if let Some(pos) = clean.find(&prefix) {
@@ -552,7 +1206,9 @@ pub fn parse_dtc_response_lines(lines: &[String], response_prefix: &str) -> Vec<
     let mut all_bytes = Vec::new();
     for line in lines {
         let clean = line.replace(' ', "").to_uppercase();
-        if !clean.starts_with(response_prefix) { continue; }
+        if !clean.starts_with(response_prefix) {
+            continue;
+        }
         let data_part = &clean[response_prefix.len()..];
         let mut i = 0;
         while i + 1 < data_part.len() {
@@ -606,7 +1262,11 @@ pub fn parse_encoded_string_response(lines: &[String], response_prefix: &str) ->
                 if let Some(pos) = data.find(response_prefix) {
                     let after_prefix = &data[pos + response_prefix.len()..];
                     // Skip the count/sequence byte (2 hex chars)
-                    let payload = if after_prefix.len() >= 2 { &after_prefix[2..] } else { after_prefix };
+                    let payload = if after_prefix.len() >= 2 {
+                        &after_prefix[2..]
+                    } else {
+                        after_prefix
+                    };
                     all_hex.push_str(payload);
                 } else {
                     // No prefix found in frame 0 - just take data after prefix len
@@ -624,7 +1284,11 @@ pub fn parse_encoded_string_response(lines: &[String], response_prefix: &str) ->
             if let Some(pos) = clean.find(response_prefix) {
                 let after_prefix = &clean[pos + response_prefix.len()..];
                 // Skip count/sequence byte (2 hex chars)
-                let payload = if after_prefix.len() >= 2 { &after_prefix[2..] } else { after_prefix };
+                let payload = if after_prefix.len() >= 2 {
+                    &after_prefix[2..]
+                } else {
+                    after_prefix
+                };
                 all_hex.push_str(payload);
             }
             continue;
@@ -646,11 +1310,10 @@ pub fn parse_encoded_string_response(lines: &[String], response_prefix: &str) ->
     let mut i = 0;
     let bytes = all_hex.as_bytes();
     while i + 1 < bytes.len() {
-        if let Ok(byte) = u8::from_str_radix(
-            std::str::from_utf8(&bytes[i..i + 2]).unwrap_or(""),
-            16,
-        ) {
-            if byte >= 0x20 && byte < 0x7F {
+        if let Ok(byte) =
+            u8::from_str_radix(std::str::from_utf8(&bytes[i..i + 2]).unwrap_or(""), 16)
+        {
+            if (0x20..0x7F).contains(&byte) {
                 result.push(byte as char);
             }
         }
