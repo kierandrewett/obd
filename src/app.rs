@@ -545,7 +545,7 @@ impl ObdApp {
             const ES_SYSTEM_REQUIRED: u32 = 0x00000001;
             const ES_DISPLAY_REQUIRED: u32 = 0x00000002;
             #[link(name = "kernel32")]
-            extern "system" {
+            unsafe extern "system" {
                 fn SetThreadExecutionState(flags: u32) -> u32;
             }
             unsafe {
@@ -622,7 +622,7 @@ impl ObdApp {
             if self.wake_lock.is_some() {
                 const ES_CONTINUOUS: u32 = 0x80000000;
                 #[link(name = "kernel32")]
-                extern "system" {
+                unsafe extern "system" {
                     fn SetThreadExecutionState(flags: u32) -> u32;
                 }
                 unsafe {
