@@ -1,18 +1,35 @@
 mod app;
+mod dtc_database;
 mod dtc_descriptions;
 mod elm327;
 mod gauges;
 mod obd;
+mod obd_ops;
 mod vin_decoder;
 
+// On WASM, only lib.rs (and its web_serial module) is used.
+// The binary target still compiles for WASM but is empty.
+#[cfg(target_arch = "wasm32")]
+fn main() {}
+
+#[cfg(not(target_arch = "wasm32"))]
 use app::{ObdApp, ObdEvent, OdbCmd};
-use obd::PidDef;
+#[cfg(not(target_arch = "wasm32"))]
+use dtc_database::DtcDatabase;
+#[cfg(not(target_arch = "wasm32"))]
+use elm327::ElmAdapter as _;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Arc, Mutex, mpsc};
+#[cfg(not(target_arch = "wasm32"))]
 use std::thread;
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
-use tracing::{info, warn};
+#[cfg(not(target_arch = "wasm32"))]
+use tracing::info;
+#[cfg(not(target_arch = "wasm32"))]
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
+#[cfg(not(target_arch = "wasm32"))]
 fn main() {
     // ── Tracing setup (internal/driver logging to stderr) ───────────────────
     tracing_subscriber::registry()
@@ -39,13 +56,31 @@ fn main() {
 
     info!("OBD Dashboard starting, debug log: {log_path}");
 
+    // ── DTC database ─────────────────────────────────────────────────────────
+    let dtc_db = Arc::new(match dtc_database::find_database_path() {
+        Some(path) => {
+            let db = DtcDatabase::load(&path);
+            if db.is_loaded() {
+                info!(path, makes = db.make_count(), codes = db.code_count(), "Loaded DTC database");
+            } else {
+                info!(path, "dtc_codes.json found but empty or unreadable");
+            }
+            db
+        }
+        None => {
+            info!("No dtc_codes.json found — run scripts/fetch_dtc_codes.py to enable manufacturer-specific descriptions");
+            DtcDatabase::default()
+        }
+    });
+
     // ── Channels ────────────────────────────────────────────────────────────
     let (cmd_tx, cmd_rx) = mpsc::channel::<OdbCmd>();
     let (event_tx, event_rx) = mpsc::channel::<ObdEvent>();
 
     // ── OBD background thread ───────────────────────────────────────────────
+    let dtc_db_worker = dtc_db.clone();
     let obd_thread = thread::spawn(move || {
-        obd_worker(cmd_rx, event_tx);
+        obd_worker(cmd_rx, event_tx, dtc_db_worker);
     });
 
     // ── GUI ─────────────────────────────────────────────────────────────────
@@ -67,7 +102,7 @@ fn main() {
                 cc,
                 cmd_tx_clone,
                 event_rx,
-                log_file_clone,
+                Some(log_file_clone),
             )))
         }),
     )
@@ -81,12 +116,50 @@ fn main() {
 
 // ── OBD worker thread ───────────────────────────────────────────────────────
 
-fn obd_worker(cmd_rx: mpsc::Receiver<OdbCmd>, event_tx: mpsc::Sender<ObdEvent>) {
+/// Holds either a real serial ELM327 or (in debug builds) a WebSocket emulator connection.
+#[cfg(not(target_arch = "wasm32"))]
+enum AnyElm {
+    Serial(elm327::Elm327),
+    #[cfg(debug_assertions)]
+    Ws(elm327::WsElm327),
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl elm327::ElmAdapter for AnyElm {
+    async fn send(&mut self, cmd: &str, timeout_ms: u64) -> Result<Vec<String>, elm327::Elm327Error> {
+        match self {
+            Self::Serial(e) => e.send(cmd, timeout_ms).await,
+            #[cfg(debug_assertions)]
+            Self::Ws(e) => e.send(cmd, timeout_ms).await,
+        }
+    }
+    async fn sleep_ms(&mut self, ms: u64) {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+    }
+    fn info(&self) -> &elm327::ConnectionInfo {
+        match self {
+            Self::Serial(e) => e.info(),
+            #[cfg(debug_assertions)]
+            Self::Ws(e) => e.info(),
+        }
+    }
+    fn info_mut(&mut self) -> &mut elm327::ConnectionInfo {
+        match self {
+            Self::Serial(e) => e.info_mut(),
+            #[cfg(debug_assertions)]
+            Self::Ws(e) => e.info_mut(),
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn obd_worker(cmd_rx: mpsc::Receiver<OdbCmd>, event_tx: mpsc::Sender<ObdEvent>, dtc_db: Arc<DtcDatabase>) {
     use app::PollConfig;
 
-    let mut elm: Option<elm327::Elm327> = None;
+    let mut elm: Option<AnyElm> = None;
     let mut live_running = false;
     let mut poll_config = PollConfig::default();
+    let mut current_make: Option<String> = None;
 
     let pid_defs = obd::mode01_pids();
 
@@ -122,26 +195,15 @@ fn obd_worker(cmd_rx: mpsc::Receiver<OdbCmd>, event_tx: mpsc::Sender<ObdEvent>) 
                     match result {
                         Ok(device) => {
                             let info = device.info.clone();
-                            elm = Some(device);
+                            elm = Some(AnyElm::Serial(device));
                             let _ = event_tx.send(ObdEvent::Connected(info));
 
                             // Read voltage + VIN on connect
                             if let Some(ref mut e) = elm {
-                                if let Ok(v) = e.read_voltage() {
+                                if let Ok(v) = elm327::block_on(e.read_voltage()) {
                                     let _ = event_tx.send(ObdEvent::Voltage(v));
                                 }
-                                match e.send_logged("0902", Duration::from_secs(5)) {
-                                    Ok(lines) => {
-                                        if let Some(vin) =
-                                            obd::parse_encoded_string_response(&lines, "4902")
-                                        {
-                                            let _ = event_tx.send(ObdEvent::Vin(vin));
-                                        }
-                                    }
-                                    Err(err) => {
-                                        info!("VIN not available: {err}");
-                                    }
-                                }
+                                elm327::block_on(obd_ops::read_vin(e, &event_tx));
                             }
                         }
                         Err(e) => {
@@ -166,54 +228,39 @@ fn obd_worker(cmd_rx: mpsc::Receiver<OdbCmd>, event_tx: mpsc::Sender<ObdEvent>) 
                     info!("Live data polling stopped");
                 }
 
-                OdbCmd::ReadDtcs => {
+                OdbCmd::ReadDtcs { make } => {
+                    if make.is_some() {
+                        current_make = make;
+                    }
                     if let Some(ref mut e) = elm {
-                        read_dtcs(e, &event_tx);
+                        let make_clone = current_make.clone();
+                        let db_clone = dtc_db.clone();
+                        elm327::block_on(obd_ops::read_dtcs(e, &event_tx, move |dtcs| {
+                            enrich_dtcs(dtcs, make_clone.as_deref(), &db_clone)
+                        }));
                     }
                 }
 
                 OdbCmd::ClearDtcs => {
                     if let Some(ref mut e) = elm {
                         info!("[DTC_CLEAR] Clearing DTCs");
-                        match e.send_logged("04", Duration::from_secs(5)) {
-                            Ok(_) => {
-                                let _ = event_tx.send(ObdEvent::LogMessage(
-                                    "[DTC_CLEAR] DTCs cleared successfully".into(),
-                                ));
-                                // Re-read to confirm
-                                read_dtcs(e, &event_tx);
-                            }
-                            Err(err) => {
-                                let _ = event_tx
-                                    .send(ObdEvent::Error(format!("Clear DTCs failed: {err}")));
-                            }
-                        }
+                        let make_clone = current_make.clone();
+                        let db_clone = dtc_db.clone();
+                        elm327::block_on(obd_ops::clear_dtcs(e, &event_tx, move |dtcs| {
+                            enrich_dtcs(dtcs, make_clone.as_deref(), &db_clone)
+                        }));
                     }
                 }
 
                 OdbCmd::ReadFreezeFrame => {
                     if let Some(ref mut e) = elm {
-                        read_freeze_frame(e, &event_tx, &pid_defs);
+                        elm327::block_on(obd_ops::read_freeze_frame(e, &event_tx, &pid_defs));
                     }
                 }
 
                 OdbCmd::ReadVin => {
                     if let Some(ref mut e) = elm {
-                        match e.send_logged("0902", Duration::from_secs(5)) {
-                            Ok(lines) => {
-                                if let Some(vin) =
-                                    obd::parse_encoded_string_response(&lines, "4902")
-                                {
-                                    let _ = event_tx.send(ObdEvent::Vin(vin));
-                                } else {
-                                    let _ = event_tx.send(ObdEvent::Vin("Not available".into()));
-                                }
-                            }
-                            Err(err) => {
-                                let _ = event_tx
-                                    .send(ObdEvent::Error(format!("VIN read failed: {err}")));
-                            }
-                        }
+                        elm327::block_on(obd_ops::read_vin(e, &event_tx));
                     }
                 }
 
@@ -224,15 +271,48 @@ fn obd_worker(cmd_rx: mpsc::Receiver<OdbCmd>, event_tx: mpsc::Sender<ObdEvent>) 
 
                 OdbCmd::QuerySupportedPids => {
                     if let Some(ref mut e) = elm {
-                        let mut all_supported = Vec::new();
-                        for range in &["0100", "0120", "0140", "0160"] {
-                            match e.query_supported_pids(range) {
-                                Ok(pids) => all_supported.extend(pids),
-                                Err(_) => break,
+                        elm327::block_on(obd_ops::query_supported_pids(e, &event_tx));
+                    }
+                }
+
+                OdbCmd::ConnectLocal { ws_port } => {
+                    #[cfg(debug_assertions)]
+                    {
+                        let addr = format!("127.0.0.1:{ws_port}");
+                        let _ = event_tx.send(ObdEvent::Connecting(
+                            format!("Connecting to ws://{addr}…"),
+                        ));
+                        match elm327::WsElm327::connect(&addr) {
+                            Ok(mut ws_elm) => {
+                                let init_tx = event_tx.clone();
+                                match elm327::block_on(obd_ops::init_elm(&mut ws_elm, move |msg| {
+                                    let _ = init_tx.send(ObdEvent::Connecting(msg.to_string()));
+                                })) {
+                                    Ok(()) => {
+                                        let info = ws_elm.info.clone();
+                                        elm = Some(AnyElm::Ws(ws_elm));
+                                        let _ = event_tx.send(ObdEvent::Connected(info));
+                                        if let Some(ref mut e) = elm {
+                                            if let Ok(v) = elm327::block_on(e.read_voltage()) {
+                                                let _ = event_tx.send(ObdEvent::Voltage(v));
+                                            }
+                                            elm327::block_on(obd_ops::read_vin(e, &event_tx));
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let _ = event_tx
+                                            .send(ObdEvent::ConnectionFailed(e.to_string()));
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                let _ =
+                                    event_tx.send(ObdEvent::ConnectionFailed(e.to_string()));
                             }
                         }
-                        let _ = event_tx.send(ObdEvent::SupportedPids(all_supported));
                     }
+                    #[cfg(not(debug_assertions))]
+                    drop(ws_port);
                 }
 
                 OdbCmd::Shutdown => {
@@ -245,10 +325,10 @@ fn obd_worker(cmd_rx: mpsc::Receiver<OdbCmd>, event_tx: mpsc::Sender<ObdEvent>) 
         // Live data polling
         if live_running {
             if let Some(ref mut e) = elm {
-                poll_live_data(e, &event_tx, &pid_defs, &poll_config);
+                elm327::block_on(obd_ops::poll_live_data(e, &event_tx, &pid_defs, &poll_config));
 
                 // Also poll voltage periodically (every poll cycle includes it)
-                if let Ok(v) = e.read_voltage() {
+                if let Ok(v) = elm327::block_on(e.read_voltage()) {
                     let _ = event_tx.send(ObdEvent::Voltage(v));
                 }
 
@@ -260,91 +340,17 @@ fn obd_worker(cmd_rx: mpsc::Receiver<OdbCmd>, event_tx: mpsc::Sender<ObdEvent>) 
     }
 }
 
-fn poll_live_data(
-    elm: &mut elm327::Elm327,
-    event_tx: &mpsc::Sender<ObdEvent>,
-    pid_defs: &[PidDef],
-    poll_config: &app::PollConfig,
-) {
-    use app::PollMode;
-
-    let poll_cmds: &[&str] = match poll_config.mode {
-        PollMode::Minimal => &[
-            "010C", // RPM
-            "010D", // Speed
-            "0111", // Throttle
-            "0104", // Engine load
-        ],
-        PollMode::Fast => &[
-            "010C", // RPM
-            "010D", // Speed
-            "0111", // Throttle
-            "0104", // Engine load
-            "0105", // Coolant temp
-            "010F", // Intake temp
-            "0110", // MAF
-        ],
-        PollMode::Full => &[
-            "010C", // RPM
-            "010D", // Speed
-            "0105", // Coolant temp
-            "0104", // Engine load
-            "0111", // Throttle
-            "010F", // Intake temp
-            "0110", // MAF
-            "012F", // Fuel level
-            "0106", // Short fuel trim B1
-            "0107", // Long fuel trim B1
-            "010B", // Intake pressure
-            "010E", // Timing advance
-            "015C", // Oil temp
-            "0142", // Control module voltage
-            "0146", // Ambient temp
-            "012C", // Commanded EGR
-            "012E", // Evap purge
-            "0133", // Barometric pressure
-            "0149", // Accelerator pos D
-            "0144", // Commanded equiv ratio
-        ],
-    };
-
-    for cmd in poll_cmds {
-        let pid_def = match pid_defs.iter().find(|p| p.cmd == *cmd) {
-            Some(p) => p,
-            None => continue,
-        };
-
-        match elm.send_logged(cmd, Duration::from_secs(2)) {
-            Ok(lines) => {
-                let raw = lines.join("|");
-                if let Some(data_bytes) = obd::parse_elm_response(cmd, &lines) {
-                    let value = obd::decode_pid(pid_def, &data_bytes);
-                    let _ = event_tx.send(ObdEvent::LiveData {
-                        pid_cmd: cmd.to_string(),
-                        name: pid_def.description.to_string(),
-                        value,
-                        unit: pid_def.unit.to_string(),
-                        raw,
-                    });
-                }
-            }
-            Err(e) => {
-                // Don't spam errors for unsupported PIDs
-                if !e.to_string().contains("Timeout") {
-                    warn!(cmd, error = %e, "PID query failed");
-                }
-            }
-        }
-
-        if poll_config.inter_pid_delay_ms > 0 {
-            std::thread::sleep(Duration::from_millis(poll_config.inter_pid_delay_ms));
-        }
-    }
-}
-
-fn enrich_dtcs(dtcs: Vec<obd::Dtc>) -> Vec<obd::Dtc> {
+#[cfg(not(target_arch = "wasm32"))]
+fn enrich_dtcs(dtcs: Vec<obd::Dtc>, make: Option<&str>, db: &DtcDatabase) -> Vec<obd::Dtc> {
     dtcs.into_iter()
         .map(|mut dtc| {
+            // Manufacturer-specific description takes priority over generic SAE description.
+            if let Some(m) = make {
+                if let Some(desc) = db.lookup(m, &dtc.code) {
+                    dtc.description = desc.to_string();
+                    return dtc;
+                }
+            }
             let desc = dtc_descriptions::describe(&dtc.code);
             if !desc.is_empty() {
                 dtc.description = desc.to_string();
@@ -354,86 +360,3 @@ fn enrich_dtcs(dtcs: Vec<obd::Dtc>) -> Vec<obd::Dtc> {
         .collect()
 }
 
-fn read_dtcs(elm: &mut elm327::Elm327, event_tx: &mpsc::Sender<ObdEvent>) {
-    info!("[DTC_READ] Reading stored DTCs (Mode 03)");
-    let stored = match elm.send_logged("03", Duration::from_secs(5)) {
-        Ok(lines) => enrich_dtcs(obd::parse_dtc_response_lines(&lines, "43")),
-        Err(e) => {
-            let _ = event_tx.send(ObdEvent::Error(format!("Read stored DTCs failed: {e}")));
-            Vec::new()
-        }
-    };
-
-    info!("[DTC_READ] Reading pending DTCs (Mode 07)");
-    let pending = match elm.send_logged("07", Duration::from_secs(5)) {
-        Ok(lines) => enrich_dtcs(obd::parse_dtc_response_lines(&lines, "47")),
-        Err(e) => {
-            let _ = event_tx.send(ObdEvent::Error(format!("Read pending DTCs failed: {e}")));
-            Vec::new()
-        }
-    };
-
-    let _ = event_tx.send(ObdEvent::DtcResult { stored, pending });
-}
-
-fn read_freeze_frame(
-    elm: &mut elm327::Elm327,
-    event_tx: &mpsc::Sender<ObdEvent>,
-    pid_defs: &[PidDef],
-) {
-    info!("[FREEZE_FRAME] Reading freeze frame data (Mode 02)");
-
-    // Freeze frame uses Mode 02 with same PIDs as Mode 01, plus frame number suffix
-    let freeze_pids = [
-        "0104", "0105", "0106", "0107", "010B", "010C", "010D", "010E", "010F", "0110", "0111",
-        "012F", "0142",
-    ];
-
-    for pid01 in &freeze_pids {
-        // Mode 02 command: replace first '01' with '02', append '00' for frame 0
-        let cmd = format!("02{}00", &pid01[2..]);
-        let pid_def = match pid_defs.iter().find(|p| p.cmd == *pid01) {
-            Some(p) => p,
-            None => continue,
-        };
-
-        match elm.send_logged(&cmd, Duration::from_secs(3)) {
-            Ok(lines) => {
-                // Response prefix is 42XX00 (42 + PID + frame number 00) then data
-                let prefix_42 = format!("42{}", &pid01[2..4]);
-                for line in &lines {
-                    let clean = line.replace(' ', "").to_uppercase();
-                    if let Some(pos) = clean.find(&prefix_42) {
-                        let after_prefix = &clean[pos + prefix_42.len()..];
-                        // Skip frame number byte (2 hex chars = "00")
-                        let data_str = if after_prefix.len() >= 2 {
-                            &after_prefix[2..]
-                        } else {
-                            after_prefix
-                        };
-                        let mut bytes = Vec::new();
-                        let mut i = 0;
-                        while i + 1 < data_str.len() {
-                            if let Ok(byte) = u8::from_str_radix(&data_str[i..i + 2], 16) {
-                                bytes.push(byte);
-                            }
-                            i += 2;
-                        }
-                        if !bytes.is_empty() {
-                            let value = obd::decode_pid(pid_def, &bytes);
-                            let _ = event_tx.send(ObdEvent::FreezeFrameData {
-                                pid_cmd: pid01.to_string(),
-                                name: pid_def.description.to_string(),
-                                value,
-                                unit: pid_def.unit.to_string(),
-                            });
-                        }
-                    }
-                }
-            }
-            Err(_) => {
-                // Freeze frame may not be available
-            }
-        }
-    }
-}

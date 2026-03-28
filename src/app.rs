@@ -1,11 +1,56 @@
-use crate::elm327::{self, ConnectionInfo};
+use crate::elm327::ConnectionInfo;
 use crate::gauges::{BarGauge, RadialGauge, sparkline};
 use crate::obd::{self, Dtc, ObdValue, PidDef};
 use egui::{self, Color32, RichText};
 use std::collections::HashMap;
+#[cfg(not(target_arch = "wasm32"))]
 use std::io::Write;
-use std::sync::{Arc, Mutex, mpsc};
-use std::time::{Duration, Instant};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::{Arc, Mutex};
+use std::sync::mpsc;
+
+// ── Cross-platform clipboard ──────────────────────────────────────────────────
+
+/// Write `text` to the system clipboard.
+///
+/// On native this delegates to egui's arboard-backed clipboard.
+/// On web, `navigator.clipboard` requires HTTPS; we also provide an
+/// `execCommand` fallback so it works on plain HTTP (dev servers etc.).
+fn platform_copy(ctx: &egui::Context, text: &str) {
+    #[cfg(not(target_arch = "wasm32"))]
+    ctx.copy_text(text.to_string());
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = ctx;
+        web_clipboard_write(text);
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(inline_js = r#"
+export function web_clipboard_write(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).catch(function() { fallback(text); });
+    } else {
+        fallback(text);
+    }
+    function fallback(t) {
+        var el = document.createElement('textarea');
+        el.value = t;
+        el.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0';
+        document.body.appendChild(el);
+        el.focus();
+        el.select();
+        try { document.execCommand('copy'); } catch (_) {}
+        document.body.removeChild(el);
+    }
+}
+"#)]
+extern "C" {
+    fn web_clipboard_write(text: &str);
+}
+use std::time::Duration;
 
 // ── Messages between OBD thread and GUI ─────────────────────────────────────
 
@@ -15,10 +60,12 @@ pub enum OdbCmd {
         port: Option<String>,
         baud: Option<u32>,
     },
+    /// Connect to a local OBD emulator via WebSocket (web only).
+    ConnectLocal { ws_port: u16 },
     Disconnect,
     StartLiveData,
     StopLiveData,
-    ReadDtcs,
+    ReadDtcs { make: Option<String> },
     ClearDtcs,
     ReadFreezeFrame,
     ReadVin,
@@ -117,6 +164,7 @@ pub struct ObdApp {
     selected_baud: Option<u32>,
     #[allow(dead_code)]
     auto_connect: bool,
+    emulator_port: u16,
 
     // Live data
     live_data: HashMap<String, LivePidState>,
@@ -150,10 +198,12 @@ pub struct ObdApp {
     // PID definitions
     pid_defs: Vec<PidDef>,
 
-    // Log file writer
-    log_file: Arc<Mutex<std::fs::File>>,
+    // Log file writer (desktop only)
+    #[cfg(not(target_arch = "wasm32"))]
+    log_file: Option<Arc<Mutex<std::fs::File>>>,
 
-    // Screen wake lock (child process handle)
+    // Screen wake lock — desktop only (std::process not available on wasm32)
+    #[cfg(not(target_arch = "wasm32"))]
     wake_lock: Option<std::process::Child>,
 }
 
@@ -163,7 +213,6 @@ struct LivePidState {
     unit: String,
     numeric_value: f64,
     history: Vec<f64>,
-    last_update: Instant,
     raw: String,
 }
 
@@ -172,9 +221,14 @@ impl ObdApp {
         _cc: &eframe::CreationContext<'_>,
         cmd_tx: mpsc::Sender<OdbCmd>,
         event_rx: mpsc::Receiver<ObdEvent>,
-        log_file: Arc<Mutex<std::fs::File>>,
+        #[cfg(not(target_arch = "wasm32"))]
+        log_file: Option<Arc<Mutex<std::fs::File>>>,
     ) -> Self {
-        let available_ports = elm327::scan_ports();
+        #[cfg(not(target_arch = "wasm32"))]
+        let available_ports = crate::elm327::scan_ports();
+        #[cfg(target_arch = "wasm32")]
+        let available_ports: Vec<String> = Vec::new();
+
         let pid_defs = obd::mode01_pids();
 
         Self {
@@ -188,6 +242,7 @@ impl ObdApp {
             selected_port: None,
             selected_baud: None,
             auto_connect: true,
+            emulator_port: 35000,
             live_data: HashMap::new(),
             live_running: false,
             supported_pids: Vec::new(),
@@ -208,7 +263,9 @@ impl ObdApp {
             poll_config: PollConfig::default(),
             dark_mode: true,
             pid_defs,
+            #[cfg(not(target_arch = "wasm32"))]
             log_file,
+            #[cfg(not(target_arch = "wasm32"))]
             wake_lock: None,
         }
     }
@@ -286,14 +343,12 @@ impl ObdApp {
                             unit: unit.clone(),
                             numeric_value: numeric,
                             history: Vec::new(),
-                            last_update: Instant::now(),
                             raw: raw.clone(),
                         });
                     state.value = value;
                     state.unit = unit;
                     state.numeric_value = numeric;
                     state.raw = raw;
-                    state.last_update = Instant::now();
                     state.history.push(numeric);
                     if state.history.len() > 300 {
                         state.history.remove(0);
@@ -360,9 +415,12 @@ impl ObdApp {
         // Write to stdout
         println!("{line}");
 
-        // Write to log file
-        if let Ok(mut f) = self.log_file.lock() {
-            let _ = writeln!(f, "{line}");
+        // Write to log file (desktop only)
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(log_file) = &self.log_file {
+            if let Ok(mut f) = log_file.lock() {
+                let _ = writeln!(f, "{line}");
+            }
         }
 
         self.log_messages.push(line);
@@ -374,6 +432,11 @@ impl ObdApp {
 
     fn send_cmd(&self, cmd: OdbCmd) {
         let _ = self.cmd_tx.send(cmd);
+    }
+
+    fn vehicle_make(&self) -> Option<String> {
+        let make = crate::vin_decoder::decode(self.vin.as_deref()?).make;
+        if make == "Unknown" { None } else { Some(make) }
     }
 
     /// Check if engine appears to be running based on RPM > 0
@@ -445,8 +508,9 @@ impl ObdApp {
                         }
                     });
 
+                #[cfg(not(target_arch = "wasm32"))]
                 if ui.button("Refresh ports").clicked() {
-                    self.available_ports = elm327::scan_ports();
+                    self.available_ports = crate::elm327::scan_ports();
                 }
 
                 if ui.button(RichText::new("Connect").strong()).clicked() {
@@ -454,6 +518,25 @@ impl ObdApp {
                         port: self.selected_port.clone(),
                         baud: self.selected_baud,
                     });
+                }
+
+                #[cfg(any(target_arch = "wasm32", debug_assertions))]
+                {
+                    ui.separator();
+                    ui.add(
+                        egui::DragValue::new(&mut self.emulator_port)
+                            .range(1024..=65535)
+                            .prefix("localhost:"),
+                    );
+                    if ui
+                        .button(RichText::new("Connect to emulator").strong())
+                        .on_hover_text("Connect to a local obd-emulator instance via WebSocket")
+                        .clicked()
+                    {
+                        self.send_cmd(OdbCmd::ConnectLocal {
+                            ws_port: self.emulator_port,
+                        });
+                    }
                 }
             }
         });
@@ -534,6 +617,8 @@ impl ObdApp {
     }
 
     fn acquire_wake_lock(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
         if self.wake_lock.is_some() {
             return;
         }
@@ -614,9 +699,12 @@ impl ObdApp {
                 }
             }
         }
+        } // end #[cfg(not(target_arch = "wasm32"))]
     }
 
     fn release_wake_lock(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
         #[cfg(target_os = "windows")]
         {
             if self.wake_lock.is_some() {
@@ -636,6 +724,7 @@ impl ObdApp {
             let _ = child.wait();
             self.add_log("[WAKE_LOCK] Screen sleep re-enabled");
         }
+        } // end #[cfg(not(target_arch = "wasm32"))]
     }
 
     fn show_dashboard(&mut self, ui: &mut egui::Ui) {
@@ -660,6 +749,7 @@ impl ObdApp {
                                     );
                                 }
                             });
+                        #[cfg(not(target_arch = "wasm32"))]
                         if ui.small_button("Refresh").clicked() {
                             self.available_ports = crate::elm327::scan_ports();
                         }
@@ -1104,7 +1194,7 @@ impl ObdApp {
 
         ui.horizontal(|ui| {
             if ui.button("Read DTCs").clicked() {
-                self.send_cmd(OdbCmd::ReadDtcs);
+                self.send_cmd(OdbCmd::ReadDtcs { make: self.vehicle_make() });
             }
             if ui
                 .button(RichText::new("Clear DTCs").color(Color32::from_rgb(220, 50, 50)))
@@ -1260,7 +1350,7 @@ impl ObdApp {
                 self.send_cmd(OdbCmd::QuerySupportedPids);
             }
             if ui.button("Read DTCs").clicked() {
-                self.send_cmd(OdbCmd::ReadDtcs);
+                self.send_cmd(OdbCmd::ReadDtcs { make: self.vehicle_make() });
             }
         });
 
@@ -1461,7 +1551,7 @@ impl ObdApp {
             }
             if ui.button("Copy").clicked() {
                 let text = self.log_messages.join("\n");
-                ui.ctx().copy_text(text);
+                platform_copy(ui.ctx(), &text);
             }
             ui.label(
                 RichText::new(format!("{} lines", self.log_messages.len()))

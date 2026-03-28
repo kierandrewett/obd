@@ -1,18 +1,5 @@
-use std::io::{Read, Write};
-use std::time::{Duration, Instant};
-use tracing::{debug, info, warn};
-
-const COMMON_BAUDS: &[u32] = &[38400, 9600, 115200, 57600, 19200, 230400, 500000];
-const PORT_PATTERNS: &[&str] = &[
-    "/dev/ttyUSB",
-    "/dev/ttyACM",
-    "/dev/ttyS",
-    "/dev/rfcomm",
-    "/dev/tty.usbserial",
-    "/dev/tty.OBD",
-    "/dev/tty.OBDII",
-    "COM",
-];
+// ConnectionInfo and Elm327Error are always available (needed on all platforms).
+// Everything else is gated to desktop builds only (requires serialport crate).
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -22,11 +9,6 @@ pub struct ConnectionInfo {
     pub protocol: String,
     pub elm_version: String,
     pub voltage: Option<String>,
-}
-
-pub struct Elm327 {
-    port: Box<dyn serialport::SerialPort>,
-    pub info: ConnectionInfo,
 }
 
 #[derive(Debug)]
@@ -54,7 +36,126 @@ impl std::fmt::Display for Elm327Error {
 
 impl std::error::Error for Elm327Error {}
 
+// ── Shared protocol utilities ─────────────────────────────────────────────────
+
+/// Translate an ATDPN response code to a human-readable protocol name.
+pub fn decode_protocol(s: &str) -> &'static str {
+    let num = s.trim_start_matches('A').trim();
+    match num {
+        "0" => "Auto",
+        "1" => "SAE J1850 PWM (41.6 kbaud)",
+        "2" => "SAE J1850 VPW (10.4 kbaud)",
+        "3" => "ISO 9141-2 (5 baud init)",
+        "4" => "ISO 14230-4 KWP (5 baud init)",
+        "5" => "ISO 14230-4 KWP (fast init)",
+        "6" => "ISO 15765-4 CAN (11-bit, 500 kbaud)",
+        "7" => "ISO 15765-4 CAN (29-bit, 500 kbaud)",
+        "8" => "ISO 15765-4 CAN (11-bit, 250 kbaud)",
+        "9" => "ISO 15765-4 CAN (29-bit, 250 kbaud)",
+        "A" => "SAE J1939 CAN (29-bit, 250 kbaud)",
+        "B" => "USER1 CAN (11-bit, 125 kbaud)",
+        "C" => "USER2 CAN (11-bit, 50 kbaud)",
+        _ => "Unknown",
+    }
+}
+
+// ── Transport trait ───────────────────────────────────────────────────────────
+
+/// Abstracts any ELM327 connection: desktop serial, Web Serial, TCP, Bluetooth…
+///
+/// Implement `send`, `info`, and `info_mut`; everything else has a default
+/// implementation built on top of `send`.
+///
+/// Desktop: wrap sync I/O in immediately-resolving async fns (never yield).
+/// WASM: genuine async using Web Serial promises.
+#[allow(async_fn_in_trait)]
+pub trait ElmAdapter {
+    /// Send an AT/OBD command and return the response lines.
+    async fn send(&mut self, cmd: &str, timeout_ms: u64) -> Result<Vec<String>, Elm327Error>;
+    fn info(&self) -> &ConnectionInfo;
+    fn info_mut(&mut self) -> &mut ConnectionInfo;
+
+    /// Sleep for `ms` milliseconds without blocking the executor.
+    /// Desktop impl uses `std::thread::sleep`; WASM uses `gloo_timers`.
+    async fn sleep_ms(&mut self, _ms: u64) {}
+
+    /// Like `send` but logs the raw exchange at INFO level.
+    async fn send_logged(&mut self, cmd: &str, timeout_ms: u64) -> Result<Vec<String>, Elm327Error> {
+        let lines = self.send(cmd, timeout_ms).await?;
+        tracing::info!(
+            cmd,
+            response_lines = lines.len(),
+            raw = %lines.join(" | "),
+            "OBD exchange"
+        );
+        Ok(lines)
+    }
+
+    async fn read_voltage(&mut self) -> Result<String, Elm327Error> {
+        let lines = self.send("ATRV", 2000).await?;
+        Ok(lines.into_iter().next().unwrap_or_else(|| "N/A".to_string()))
+    }
+}
+
+// ── Desktop block_on executor ─────────────────────────────────────────────────
+
+/// Drive a future to completion on the current thread.
+///
+/// Only valid for futures that never return `Poll::Pending` (i.e. the desktop
+/// `Elm327` adapter whose async fns wrap blocking I/O and always complete
+/// immediately).  Using this with a genuinely async future will panic.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn block_on<F: std::future::Future>(f: F) -> F::Output {
+    use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+    fn noop(_: *const ()) {}
+    fn noop_clone(_: *const ()) -> RawWaker { make_noop_waker() }
+    fn make_noop_waker() -> RawWaker {
+        static VTABLE: RawWakerVTable = RawWakerVTable::new(noop_clone, noop, noop, noop);
+        RawWaker::new(std::ptr::null(), &VTABLE)
+    }
+    let waker = unsafe { Waker::from_raw(make_noop_waker()) };
+    let mut cx = Context::from_waker(&waker);
+    let mut f = std::pin::pin!(f);
+    loop {
+        match f.as_mut().poll(&mut cx) {
+            Poll::Ready(val) => return val,
+            Poll::Pending => panic!("desktop ElmAdapter future must not return Pending"),
+        }
+    }
+}
+
+// ── Desktop-only serial port implementation ─────────────────────────────────
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::io::{Read, Write};
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::{Duration, Instant};
+#[cfg(not(target_arch = "wasm32"))]
+use tracing::{debug, info, warn};
+
+#[cfg(not(target_arch = "wasm32"))]
+const COMMON_BAUDS: &[u32] = &[38400, 9600, 115200, 57600, 19200, 230400, 500000];
+
+#[cfg(not(target_arch = "wasm32"))]
+const PORT_PATTERNS: &[&str] = &[
+    "/dev/ttyUSB",
+    "/dev/ttyACM",
+    "/dev/ttyS",
+    "/dev/rfcomm",
+    "/dev/tty.usbserial",
+    "/dev/tty.OBD",
+    "/dev/tty.OBDII",
+    "COM",
+];
+
+#[cfg(not(target_arch = "wasm32"))]
+pub struct Elm327 {
+    port: Box<dyn serialport::SerialPort>,
+    pub info: ConnectionInfo,
+}
+
 /// Scan system for available serial ports matching OBD adapter patterns
+#[cfg(not(target_arch = "wasm32"))]
 pub fn scan_ports() -> Vec<String> {
     let mut found = Vec::new();
     match serialport::available_ports() {
@@ -90,6 +191,7 @@ pub fn scan_ports() -> Vec<String> {
 }
 
 /// Try to connect with auto port and baud detection
+#[cfg(not(target_arch = "wasm32"))]
 pub fn auto_connect(progress: Option<&dyn Fn(&str)>) -> Result<Elm327, Elm327Error> {
     let ports = scan_ports();
     if ports.is_empty() {
@@ -117,6 +219,7 @@ pub fn auto_connect(progress: Option<&dyn Fn(&str)>) -> Result<Elm327, Elm327Err
 }
 
 /// Connect to a specific port with optional baud override
+#[cfg(not(target_arch = "wasm32"))]
 pub fn connect(
     port_name: &str,
     baud: Option<u32>,
@@ -138,6 +241,7 @@ pub fn connect(
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn try_port(port_name: &str, report: &dyn Fn(&str)) -> Result<Elm327, Elm327Error> {
     for &baud in COMMON_BAUDS {
         report(&format!("  Trying {baud} baud..."));
@@ -151,6 +255,7 @@ fn try_port(port_name: &str, report: &dyn Fn(&str)) -> Result<Elm327, Elm327Erro
     Err(Elm327Error::NoBaudFound(port_name.to_string()))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn try_port_baud(port_name: &str, baud: u32, report: &dyn Fn(&str)) -> Result<Elm327, Elm327Error> {
     let mut port = serialport::new(port_name, baud)
         .timeout(Duration::from_secs(3))
@@ -232,7 +337,7 @@ fn try_port_baud(port_name: &str, baud: u32, report: &dyn Fn(&str)) -> Result<El
     let proto_resp = read_response(&mut port, Duration::from_secs(2))?;
     let protocol = proto_resp
         .first()
-        .map(|s| decode_protocol(s.trim()))
+        .map(|s| decode_protocol(s.trim()).to_string())
         .unwrap_or_else(|| "Unknown".to_string());
 
     report(&format!("  Protocol: {protocol}"));
@@ -257,71 +362,30 @@ fn try_port_baud(port_name: &str, baud: u32, report: &dyn Fn(&str)) -> Result<El
     Ok(Elm327 { port, info })
 }
 
-impl Elm327 {
-    /// Send an OBD/AT command and return response lines
-    pub fn send(&mut self, cmd: &str, timeout: Duration) -> Result<Vec<String>, Elm327Error> {
+#[cfg(not(target_arch = "wasm32"))]
+impl ElmAdapter for Elm327 {
+    async fn send(&mut self, cmd: &str, timeout_ms: u64) -> Result<Vec<String>, Elm327Error> {
         debug!(cmd, "TX");
         write_cmd(&mut self.port, cmd)?;
-        let lines = read_response(&mut self.port, timeout)?;
+        let lines = read_response(&mut self.port, Duration::from_millis(timeout_ms))?;
         debug!(cmd, response = ?lines, "RX");
         Ok(lines)
     }
 
-    /// Send command, log the raw exchange
-    pub fn send_logged(
-        &mut self,
-        cmd: &str,
-        timeout: Duration,
-    ) -> Result<Vec<String>, Elm327Error> {
-        let start = Instant::now();
-        let lines = self.send(cmd, timeout)?;
-        let elapsed = start.elapsed();
-        info!(
-            cmd = cmd,
-            response_lines = lines.len(),
-            elapsed_ms = elapsed.as_millis(),
-            raw_response = %lines.join(" | "),
-            "OBD exchange"
-        );
-        Ok(lines)
+    async fn sleep_ms(&mut self, ms: u64) {
+        std::thread::sleep(Duration::from_millis(ms));
     }
 
-    /// Read battery voltage
-    pub fn read_voltage(&mut self) -> Result<String, Elm327Error> {
-        let lines = self.send("ATRV", Duration::from_secs(2))?;
-        Ok(lines
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| "N/A".to_string()))
+    fn info(&self) -> &ConnectionInfo {
+        &self.info
     }
 
-    /// Check which PIDs are supported in a range
-    pub fn query_supported_pids(&mut self, range_cmd: &str) -> Result<Vec<u8>, Elm327Error> {
-        let lines = self.send_logged(range_cmd, Duration::from_secs(3))?;
-        let base_pid = u8::from_str_radix(&range_cmd[2..4], 16).unwrap_or(0);
-
-        for line in &lines {
-            let clean = line.replace(' ', "").to_uppercase();
-            let prefix = format!("41{}", &range_cmd[2..4].to_uppercase());
-            if let Some(pos) = clean.find(&prefix) {
-                let hex = &clean[pos + prefix.len()..];
-                if hex.len() >= 8 {
-                    if let Ok(bits) = u32::from_str_radix(&hex[..8], 16) {
-                        let mut supported = Vec::new();
-                        for i in 0..32 {
-                            if bits & (1 << (31 - i)) != 0 {
-                                supported.push(base_pid + i as u8 + 1);
-                            }
-                        }
-                        return Ok(supported);
-                    }
-                }
-            }
-        }
-        Ok(Vec::new())
+    fn info_mut(&mut self) -> &mut ConnectionInfo {
+        &mut self.info
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn write_cmd(port: &mut Box<dyn serialport::SerialPort>, cmd: &str) -> Result<(), Elm327Error> {
     let data = format!("{cmd}\r");
     port.write_all(data.as_bytes())
@@ -331,6 +395,7 @@ fn write_cmd(port: &mut Box<dyn serialport::SerialPort>, cmd: &str) -> Result<()
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn read_response(
     port: &mut Box<dyn serialport::SerialPort>,
     timeout: Duration,
@@ -382,23 +447,63 @@ fn read_response(
     Ok(lines)
 }
 
-fn decode_protocol(s: &str) -> String {
-    // ATDPN returns something like "A6" or "6"
-    let num = s.trim_start_matches('A').trim();
-    match num {
-        "0" => "Auto".to_string(),
-        "1" => "SAE J1850 PWM (41.6 kbaud)".to_string(),
-        "2" => "SAE J1850 VPW (10.4 kbaud)".to_string(),
-        "3" => "ISO 9141-2 (5 baud init)".to_string(),
-        "4" => "ISO 14230-4 KWP (5 baud init)".to_string(),
-        "5" => "ISO 14230-4 KWP (fast init)".to_string(),
-        "6" => "ISO 15765-4 CAN (11-bit, 500 kbaud)".to_string(),
-        "7" => "ISO 15765-4 CAN (29-bit, 500 kbaud)".to_string(),
-        "8" => "ISO 15765-4 CAN (11-bit, 250 kbaud)".to_string(),
-        "9" => "ISO 15765-4 CAN (29-bit, 250 kbaud)".to_string(),
-        "A" => "SAE J1939 CAN (29-bit, 250 kbaud)".to_string(),
-        "B" => "USER1 CAN (11-bit, 125 kbaud)".to_string(),
-        "C" => "USER2 CAN (11-bit, 50 kbaud)".to_string(),
-        _ => format!("Protocol {s}"),
+// ── Dev-only WebSocket adapter (for local emulator) ──────────────────────────
+
+#[cfg(all(not(target_arch = "wasm32"), debug_assertions))]
+pub struct WsElm327 {
+    ws: tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>,
+    pub info: ConnectionInfo,
+}
+
+#[cfg(all(not(target_arch = "wasm32"), debug_assertions))]
+impl WsElm327 {
+    pub fn connect(addr: &str) -> Result<Self, Elm327Error> {
+        let url = format!("ws://{addr}/");
+        let (ws, _) = tungstenite::connect(&url)
+            .map_err(|e| Elm327Error::Serial(format!("Cannot connect to {addr}: {e}")))?;
+        let info = ConnectionInfo {
+            port: url,
+            baud: 0,
+            protocol: String::new(),
+            elm_version: String::new(),
+            voltage: None,
+        };
+        Ok(Self { ws, info })
     }
 }
+
+#[cfg(all(not(target_arch = "wasm32"), debug_assertions))]
+impl ElmAdapter for WsElm327 {
+    async fn send(&mut self, cmd: &str, _timeout_ms: u64) -> Result<Vec<String>, Elm327Error> {
+        use tungstenite::Message;
+        self.ws
+            .send(Message::Text(cmd.to_string().into()))
+            .map_err(|e| Elm327Error::Serial(format!("WS send: {e}")))?;
+        let msg = self.ws
+            .read()
+            .map_err(|e| Elm327Error::Timeout(format!("WS read: {e}")))?;
+        let text = match msg {
+            Message::Text(t) => t.to_string(),
+            _ => return Ok(vec![]),
+        };
+        let lines = text
+            .split(['\r', '\n'])
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        Ok(lines)
+    }
+
+    async fn sleep_ms(&mut self, ms: u64) {
+        std::thread::sleep(Duration::from_millis(ms));
+    }
+
+    fn info(&self) -> &ConnectionInfo {
+        &self.info
+    }
+
+    fn info_mut(&mut self) -> &mut ConnectionInfo {
+        &mut self.info
+    }
+}
+
