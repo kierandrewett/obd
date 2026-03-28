@@ -20,5 +20,11 @@
   "P1492": "Battery temperature sensor high voltage",
   "P1494": "EVAP ventilation switch or mechanical fault",
   "P1495": "EVAP ventilation solenoid circuit fault",
-  "P1496": "5 Volt supply output too low"
+  "P1496": "5 Volt supply output too low",
+  "P1400": "Manifold differential pressure sensor fault",
+  "P1489": "High speed condenser fan control relay fault",
+  "P1295": "No 5 - volt supply to TP sensor",
+  "P1750": "Pressure control,shift control,TCC solenoid fault",
+  "P1899": "P/N position/transaxle range switch circuit fault",
+  "U1700": "SWS Communication Line"
 }

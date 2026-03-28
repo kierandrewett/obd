@@ -16,5 +16,10 @@
   "P1513": "Idle speed control (ISC) actuator - circuit malfunction",
   "P1511": "Idle speed control (ISC) actuator/idle speed control (ISC) actuator position sensor - circuit malfunction",
   "P1531": "AC compressor clutch relay - circuit malfunction",
-  "P1555": "Brake pedal position (BPP) switch - signal malfunction"
+  "P1555": "Brake pedal position (BPP) switch - signal malfunction",
+  "P1221": "Air Flow Meter Or Circuit",
+  "P1243": "Fuel Pump Relay Or Circuit",
+  "P1653": "Camshaft position (CMP) actuator - signal malfunction",
+  "P1662": "Cruise control indicator lamp -malfunction",
+  "P1690": "Fuel shut-off control - malfunction"
 }

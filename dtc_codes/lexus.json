@@ -34,5 +34,13 @@
   "P1520": "Stop Lamp Switch Malfunction",
   "P1566": "Cruise Control Main Switch Circuit Malfunction",
   "P1780": "PNP Switch Malfunction",
-  "P1410": "EGR Valve Position Sensor Circuit Malfunction"
+  "P1410": "EGR Valve Position Sensor Circuit Malfunction",
+  "P1310": "Igniter Circuit Malfunction (No. 3)",
+  "P1330": "Igniter Circuit Malfunction (No. 7)",
+  "P1320": "Igniter Circuit Malfunction (No. 5)",
+  "P1400": "Sub-TP Sensor Malfunction",
+  "P1200": "Fuel Pump Relay/ECU Circuit Malfunction",
+  "P1605": "Knock Control CPU Malfunction",
+  "P1645": "Body ECU Malfunction",
+  "P1656": "OCV Circuit Malfunction (Bank 1)"
 }

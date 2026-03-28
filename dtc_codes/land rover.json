@@ -42,5 +42,15 @@
   "P1776": "Gearbox Ignition Retard Request Timeout Fault",
   "P1775": "Gearbox Fault",
   "P1447": "Evap System Purge Valve Open or Short Circuit Fault",
-  "P1448": "Evap System Purge Valve Flow 2 Fault"
+  "P1448": "Evap System Purge Valve Flow 2 Fault",
+  "P1075": "Lambda control limit bank 2.Short circuit to ground",
+  "P1179": "Maximum Negative AMFR Correction Fault",
+  "P1441": "Evap System Purge Valve Flow 1 Fault",
+  "P1203": "Injector 3 Open Circuit or Ground Short Fault",
+  "P1701": "Transfer Box Line Fault",
+  "P1777": "Gearbox Ignition Retard Request Line Fault",
+  "P1608": "Malfunction Indicator Lamp Open Circuit Fault",
+  "P1623": "ECM Security Code Fault",
+  "P1622": "Repeated Wrong ECM Security Code Fault",
+  "P1621": "Serial Data Link Dead Fault"
 }

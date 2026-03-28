@@ -1,6 +1,6 @@
 use crate::elm327::ConnectionInfo;
 use crate::gauges::{BarGauge, RadialGauge, sparkline};
-use crate::obd::{self, Dtc, ObdValue, PidDef};
+use crate::obd::{self, DescSource, Dtc, ObdValue, PidDef};
 use egui::{self, Color32, RichText};
 use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
@@ -118,6 +118,11 @@ pub enum ObdEvent {
         raw: String,
     },
     DtcResult {
+        stored: Vec<Dtc>,
+        pending: Vec<Dtc>,
+    },
+    /// Descriptions enriched in background — replaces DtcResult lists silently.
+    DtcDescriptionsReady {
         stored: Vec<Dtc>,
         pending: Vec<Dtc>,
     },
@@ -368,6 +373,10 @@ impl ObdApp {
                             self.add_log(&format!("[DTC_PENDING] code={}", dtc.code));
                         }
                     }
+                    self.stored_dtcs = stored;
+                    self.pending_dtcs = pending;
+                }
+                ObdEvent::DtcDescriptionsReady { stored, pending } => {
                     self.stored_dtcs = stored;
                     self.pending_dtcs = pending;
                 }
@@ -1209,51 +1218,103 @@ impl ObdApp {
         ui.add_space(8.0);
 
         egui::ScrollArea::vertical().show(ui, |ui| {
-            if !self.stored_dtcs.is_empty() {
-                ui.heading(
-                    RichText::new(format!("Stored DTCs ({})", self.stored_dtcs.len()))
-                        .color(Color32::from_rgb(220, 50, 50)),
-                );
-                for dtc in &self.stored_dtcs {
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new(&dtc.code)
-                                .strong()
-                                .color(Color32::from_rgb(220, 50, 50))
-                                .monospace(),
-                        );
-                        if !dtc.description.is_empty() {
-                            ui.label(&dtc.description);
-                        }
-                    });
-                }
-                ui.add_space(8.0);
-            }
+            let all_empty = self.stored_dtcs.is_empty() && self.pending_dtcs.is_empty();
 
-            if !self.pending_dtcs.is_empty() {
-                ui.heading(
-                    RichText::new(format!("Pending DTCs ({})", self.pending_dtcs.len()))
-                        .color(Color32::from_rgb(220, 180, 50)),
-                );
-                for dtc in &self.pending_dtcs {
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new(&dtc.code)
-                                .strong()
-                                .color(Color32::from_rgb(220, 180, 50))
-                                .monospace(),
-                        );
-                        if !dtc.description.is_empty() {
-                            ui.label(&dtc.description);
-                        }
-                    });
-                }
-            }
+            if !all_empty {
+                let sections: &[(&str, &[obd::Dtc], Color32)] = &[
+                    ("Stored", &self.stored_dtcs, Color32::from_rgb(220, 50, 50)),
+                    ("Pending", &self.pending_dtcs, Color32::from_rgb(220, 180, 50)),
+                ];
 
-            if self.stored_dtcs.is_empty()
-                && self.pending_dtcs.is_empty()
-                && !self.dtc_status.is_empty()
-            {
+                for (label, dtcs, color) in sections {
+                    if dtcs.is_empty() {
+                        continue;
+                    }
+                    ui.heading(RichText::new(format!("{} DTCs ({})", label, dtcs.len())).color(*color));
+                    ui.add_space(4.0);
+
+                    egui_extras::TableBuilder::new(ui)
+                        .striped(true)
+                        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                        .column(egui_extras::Column::exact(90.0))   // Code
+                        .column(egui_extras::Column::remainder())    // Description
+                        .column(egui_extras::Column::initial(300.0).at_least(300.0))  // Source
+                        .header(20.0, |mut row| {
+                            row.col(|ui| { ui.strong("Code"); });
+                            row.col(|ui| { ui.strong("Description"); });
+                            row.col(|ui| { ui.strong("Source"); });
+                        })
+                        .body(|mut body| {
+                            for dtc in *dtcs {
+                                body.row(22.0, |mut row| {
+                                    row.col(|ui| {
+                                        ui.label(
+                                            RichText::new(&dtc.code)
+                                                .strong()
+                                                .color(*color)
+                                                .monospace(),
+                                        );
+                                    });
+                                    row.col(|ui| {
+                                        match &dtc.desc_source {
+                                            DescSource::Pending => {
+                                                ui.label(
+                                                    RichText::new("Looking up description…")
+                                                        .color(Color32::from_gray(100))
+                                                        .italics(),
+                                                );
+                                            }
+                                            DescSource::NotFound => {
+                                                ui.label(
+                                                    RichText::new("No description found")
+                                                        .color(Color32::from_gray(110))
+                                                        .italics(),
+                                                );
+                                            }
+                                            _ => { ui.label(&dtc.description); }
+                                        }
+                                    });
+                                    row.col(|ui| {
+                                        match &dtc.desc_source {
+                                            DescSource::Pending => {
+                                                ui.label(
+                                                    RichText::new("loading…")
+                                                        .color(Color32::from_gray(80))
+                                                        .italics(),
+                                                );
+                                            }
+                                            DescSource::Family(canonical) => {
+                                                let family = crate::dtc_database::family_label(canonical);
+                                                let vehicle = self.vehicle_make()
+                                                    .unwrap_or_else(|| "this vehicle".to_string());
+                                                ui.label(
+                                                    RichText::new(format!("via {canonical} · {family}"))
+                                                        .color(Color32::from_rgb(180, 140, 60)),
+                                                ).on_hover_text(format!(
+                                                    "No {vehicle}-specific description was found.\n\
+                                                     {canonical} is in the same corporate family ({family})\
+                                                     \nand shares DTC codes with {vehicle}."
+                                                ));
+                                            }
+                                            DescSource::Sae => {
+                                                ui.label(
+                                                    RichText::new("SAE J2012")
+                                                        .color(Color32::from_gray(120)),
+                                                ).on_hover_text(
+                                                    "Generic SAE J2012 standard description — \
+                                                     no manufacturer-specific entry found."
+                                                );
+                                            }
+                                            _ => {}
+                                        }
+                                    });
+                                });
+                            }
+                        });
+
+                    ui.add_space(12.0);
+                }
+            } else if !self.dtc_status.is_empty() {
                 ui.label(
                     RichText::new("No trouble codes found")
                         .color(Color32::from_rgb(50, 200, 80))

@@ -23,5 +23,21 @@
   "P1792": "Trans EEPROM Checksum Error",
   "P1404": "EGR Valve Stuck Closed",
   "P1459": "EVAP Emission Purge Flow Switch Malfunction",
-  "P1491": "EGR Valve Lift Insufficient Detected"
+  "P1491": "EGR Valve Lift Insufficient Detected",
+  "P1115": "ECT Sensor Circuit Intermittent Voltage High",
+  "P1122": "TP Sensor Circuit Intermittent Voltage Low",
+  "P1154": "H02S Transition Time Ratio Bank 2 Sensor 1",
+  "P1394": "G Sensor Intermittent Voltage High",
+  "P1393": "G Sensor Voltage High",
+  "P1441": "EVAP System Flow During Non-Purge",
+  "P1498": "EGR Valve Lift Sensor Voltage High",
+  "P1618": "SPI Communications Error",
+  "P1627": "PCM A/D Conversion Malfunction",
+  "P1635": "5 Volt Reference Voltage Circuit Malfunction",
+  "P1640": "ODM Output ??A?? Circuit Fault (1998 Rodeo)",
+  "P1625": "PCM Unexpected Reset",
+  "P1835": "Trans Kickdown Switch Malfunction",
+  "P1850": "Brake Band Apply Solenoid Malfunction",
+  "P1860": "TCC PWM Solenoid Circuit Failure",
+  "P1870": "Transmission Component Slipping"
 }

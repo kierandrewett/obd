@@ -233,22 +233,32 @@ fn obd_worker(cmd_rx: mpsc::Receiver<OdbCmd>, event_tx: mpsc::Sender<ObdEvent>, 
                         current_make = make;
                     }
                     if let Some(ref mut e) = elm {
-                        let make_clone = current_make.clone();
-                        let db_clone = dtc_db.clone();
-                        elm327::block_on(obd_ops::read_dtcs(e, &event_tx, move |dtcs| {
-                            enrich_dtcs(dtcs, make_clone.as_deref(), &db_clone)
-                        }));
+                        let (stored, pending) = elm327::block_on(obd_ops::read_dtcs(e, &event_tx));
+                        let tx2    = event_tx.clone();
+                        let make2  = current_make.clone();
+                        let db2    = dtc_db.clone();
+                        thread::spawn(move || {
+                            let _ = tx2.send(ObdEvent::DtcDescriptionsReady {
+                                stored:  enrich_dtcs(stored,  make2.as_deref(), &db2),
+                                pending: enrich_dtcs(pending, make2.as_deref(), &db2),
+                            });
+                        });
                     }
                 }
 
                 OdbCmd::ClearDtcs => {
                     if let Some(ref mut e) = elm {
                         info!("[DTC_CLEAR] Clearing DTCs");
-                        let make_clone = current_make.clone();
-                        let db_clone = dtc_db.clone();
-                        elm327::block_on(obd_ops::clear_dtcs(e, &event_tx, move |dtcs| {
-                            enrich_dtcs(dtcs, make_clone.as_deref(), &db_clone)
-                        }));
+                        let (stored, pending) = elm327::block_on(obd_ops::clear_dtcs(e, &event_tx));
+                        let tx2    = event_tx.clone();
+                        let make2  = current_make.clone();
+                        let db2    = dtc_db.clone();
+                        thread::spawn(move || {
+                            let _ = tx2.send(ObdEvent::DtcDescriptionsReady {
+                                stored:  enrich_dtcs(stored,  make2.as_deref(), &db2),
+                                pending: enrich_dtcs(pending, make2.as_deref(), &db2),
+                            });
+                        });
                     }
                 }
 
@@ -344,21 +354,36 @@ fn obd_worker(cmd_rx: mpsc::Receiver<OdbCmd>, event_tx: mpsc::Sender<ObdEvent>, 
 fn enrich_dtcs(dtcs: Vec<obd::Dtc>, make: Option<&str>, db: &DtcDatabase) -> Vec<obd::Dtc> {
     dtcs.into_iter()
         .map(|mut dtc| {
-            // Manufacturer-specific description takes priority over generic SAE description.
+            // Try manufacturer DB (direct match, then same-family alias group).
             if let Some(m) = make {
-                if let Some(desc) = db.lookup(m, &dtc.code) {
+                if let Some((desc, alias_src)) = db.lookup_with_source(m, &dtc.code) {
                     dtc.description = desc.to_string();
+                    dtc.desc_source = match alias_src {
+                        None    => obd::DescSource::Own,
+                        Some(a) => obd::DescSource::Family(title_case(a)),
+                    };
                     return dtc;
                 }
             }
-            let desc = dtc_descriptions::describe(&dtc.code);
-            dtc.description = if desc.is_empty() {
-                "No DTC description found".to_string()
+            // SAE J2012 generic fallback.
+            let sae = dtc_descriptions::describe(&dtc.code);
+            if !sae.is_empty() {
+                dtc.description = sae.to_string();
+                dtc.desc_source = obd::DescSource::Sae;
             } else {
-                desc.to_string()
-            };
+                dtc.desc_source = obd::DescSource::NotFound;
+            }
             dtc
         })
         .collect()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn title_case(s: &str) -> String {
+    let mut t = s.to_string();
+    if let Some(c) = t.get_mut(0..1) {
+        c.make_ascii_uppercase();
+    }
+    t
 }
 

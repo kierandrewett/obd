@@ -141,10 +141,28 @@ impl fmt::Display for ObdValue {
     }
 }
 
+/// Where a DTC description came from.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum DescSource {
+    /// Description lookup not yet complete — codes just arrived from the vehicle.
+    #[default]
+    Pending,
+    /// Matched directly in this make's own manufacturer database.
+    Own,
+    /// Matched via a corporate-family alias (e.g. Opel → Chevrolet).
+    /// Contains the human-readable canonical make name, e.g. `"Chevrolet"`.
+    Family(String),
+    /// SAE J2012 generic description (applies to all makes).
+    Sae,
+    /// No description found anywhere.
+    NotFound,
+}
+
 #[derive(Debug, Clone)]
 pub struct Dtc {
     pub code: String,
     pub description: String,
+    pub desc_source: DescSource,
 }
 
 #[allow(dead_code)]
@@ -1162,6 +1180,7 @@ pub fn decode_dtc_response(data: &[u8]) -> Vec<Dtc> {
         codes.push(Dtc {
             code,
             description: String::new(),
+            desc_source: DescSource::Pending,
         });
         i += 2;
     }

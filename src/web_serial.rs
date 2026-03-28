@@ -359,6 +359,7 @@ pub async fn run_worker(cmd_rx: mpsc::Receiver<OdbCmd>, event_tx: mpsc::Sender<O
     let mut elm: Option<ElmConn> = None;
     let mut live_running = false;
     let mut poll_config = PollConfig::default();
+    let mut current_make: Option<String> = None;
     let pid_defs = obd::mode01_pids();
 
     loop {
@@ -413,14 +414,33 @@ pub async fn run_worker(cmd_rx: mpsc::Receiver<OdbCmd>, event_tx: mpsc::Sender<O
                     }
                     OdbCmd::StartLiveData => live_running = true,
                     OdbCmd::StopLiveData => live_running = false,
-                    OdbCmd::ReadDtcs { .. } => {
+                    OdbCmd::ReadDtcs { make } => {
+                        if make.is_some() {
+                            current_make = make;
+                        }
                         if let Some(ref mut e) = elm {
-                            obd_ops::read_dtcs(e, &event_tx, |d| d).await;
+                            let (stored, pending) = obd_ops::read_dtcs(e, &event_tx).await;
+                            let tx2   = event_tx.clone();
+                            let make2 = current_make.clone();
+                            wasm_bindgen_futures::spawn_local(async move {
+                                let _ = tx2.send(crate::app::ObdEvent::DtcDescriptionsReady {
+                                    stored:  obd_ops::enrich_with_db(stored,  make2.as_deref()),
+                                    pending: obd_ops::enrich_with_db(pending, make2.as_deref()),
+                                });
+                            });
                         }
                     }
                     OdbCmd::ClearDtcs => {
                         if let Some(ref mut e) = elm {
-                            obd_ops::clear_dtcs(e, &event_tx, |d| d).await;
+                            let (stored, pending) = obd_ops::clear_dtcs(e, &event_tx).await;
+                            let tx2   = event_tx.clone();
+                            let make2 = current_make.clone();
+                            wasm_bindgen_futures::spawn_local(async move {
+                                let _ = tx2.send(crate::app::ObdEvent::DtcDescriptionsReady {
+                                    stored:  obd_ops::enrich_with_db(stored,  make2.as_deref()),
+                                    pending: obd_ops::enrich_with_db(pending, make2.as_deref()),
+                                });
+                            });
                         }
                     }
                     OdbCmd::ReadFreezeFrame => {
@@ -462,3 +482,4 @@ pub async fn run_worker(cmd_rx: mpsc::Receiver<OdbCmd>, event_tx: mpsc::Sender<O
         gloo_timers::future::TimeoutFuture::new(10).await;
     }
 }
+

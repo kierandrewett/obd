@@ -64,37 +64,39 @@ where
 
 /// Read stored (Mode 03) and pending (Mode 07) DTCs.
 ///
-/// `enrich` receives the raw code list and may replace descriptions with
-/// manufacturer-specific ones.  Pass `|d| d` on platforms without a DTC database.
-pub async fn read_dtcs<A, F>(elm: &mut A, event_tx: &mpsc::Sender<ObdEvent>, enrich: F)
-where
-    A: ElmAdapter,
-    F: Fn(Vec<obd::Dtc>) -> Vec<obd::Dtc>,
-{
+/// Sends `DtcResult` immediately with codes and `DescSource::Pending` descriptions
+/// so the UI can display codes right away.  Returns the raw lists so the caller
+/// can enrich descriptions in a background task.
+pub async fn read_dtcs<A: ElmAdapter>(
+    elm: &mut A,
+    event_tx: &mpsc::Sender<ObdEvent>,
+) -> (Vec<obd::Dtc>, Vec<obd::Dtc>) {
     let stored = match elm.send("03", 5000).await {
-        Ok(lines) => enrich(obd::parse_dtc_response_lines(&lines, "43")),
+        Ok(lines) => obd::parse_dtc_response_lines(&lines, "43"),
         Err(_) => Vec::new(),
     };
     let pending = match elm.send("07", 5000).await {
-        Ok(lines) => enrich(obd::parse_dtc_response_lines(&lines, "47")),
+        Ok(lines) => obd::parse_dtc_response_lines(&lines, "47"),
         Err(_) => Vec::new(),
     };
-    let _ = event_tx.send(ObdEvent::DtcResult { stored, pending });
+    let _ = event_tx.send(ObdEvent::DtcResult { stored: stored.clone(), pending: pending.clone() });
+    (stored, pending)
 }
 
 /// Clear all DTCs (Mode 04) then re-read to confirm.
-pub async fn clear_dtcs<A, F>(elm: &mut A, event_tx: &mpsc::Sender<ObdEvent>, enrich: F)
-where
-    A: ElmAdapter,
-    F: Fn(Vec<obd::Dtc>) -> Vec<obd::Dtc>,
-{
+/// Same immediate-send behaviour as `read_dtcs`.
+pub async fn clear_dtcs<A: ElmAdapter>(
+    elm: &mut A,
+    event_tx: &mpsc::Sender<ObdEvent>,
+) -> (Vec<obd::Dtc>, Vec<obd::Dtc>) {
     match elm.send("04", 5000).await {
         Ok(_) => {
             let _ = event_tx.send(ObdEvent::LogMessage("[DTC_CLEAR] DTCs cleared".into()));
-            read_dtcs(elm, event_tx, enrich).await;
+            read_dtcs(elm, event_tx).await
         }
         Err(e) => {
             let _ = event_tx.send(ObdEvent::Error(format!("Clear DTCs failed: {e}")));
+            (Vec::new(), Vec::new())
         }
     }
 }
@@ -223,4 +225,45 @@ pub async fn query_supported_pids<A: ElmAdapter>(
         }
     }
     let _ = event_tx.send(ObdEvent::SupportedPids(all_supported));
+}
+
+/// Full DTC enrichment pipeline using the compile-time embedded DTC database.
+/// Checks the manufacturer DB first (direct match then alias/family group),
+/// falls back to SAE J2012, then marks as `NotFound`.
+/// Used on WASM where the filesystem is unavailable at runtime.
+#[cfg(target_arch = "wasm32")]
+pub fn enrich_with_db(dtcs: Vec<crate::obd::Dtc>, make: Option<&str>) -> Vec<crate::obd::Dtc> {
+    dtcs.into_iter()
+        .map(|mut dtc| {
+            if let Some(m) = make {
+                let db = &*crate::dtc_database::EMBEDDED_DB;
+                if let Some((desc, alias_src)) = db.lookup_with_source(m, &dtc.code) {
+                    dtc.description = desc.to_string();
+                    dtc.desc_source = match alias_src {
+                        None => crate::obd::DescSource::Own,
+                        Some(a) => crate::obd::DescSource::Family(title_case(a)),
+                    };
+                    return dtc;
+                }
+            }
+            // SAE J2012 generic fallback
+            let sae = crate::dtc_descriptions::describe(&dtc.code);
+            if !sae.is_empty() {
+                dtc.description = sae.to_string();
+                dtc.desc_source = crate::obd::DescSource::Sae;
+            } else {
+                dtc.desc_source = crate::obd::DescSource::NotFound;
+            }
+            dtc
+        })
+        .collect()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn title_case(s: &str) -> String {
+    let mut t = s.to_string();
+    if let Some(c) = t.get_mut(0..1) {
+        c.make_ascii_uppercase();
+    }
+    t
 }

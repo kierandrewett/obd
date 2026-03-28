@@ -19,5 +19,20 @@
   "P1552": "Idle Air Control Valve Closing Coil Circuit Shorted",
   "P1586": "Encoding Signal Circuit Not Rationale",
   "P1715": "Automatic Transmission Pulse Generator A Circuit",
-  "P1443": "EVAP System Fault (Fuel Tank Cap Missing)"
+  "P1443": "EVAP System Fault (Fuel Tank Cap Missing)",
+  "P1123": "Lang Term Fuel Trim Adaptive Too Lean",
+  "P1147": "ETS Sub Accel Position Sensor 1 Malfunction",
+  "P1154": "HO2S Bank 2 Sensor 1 Transition Time Switch (Bank 2 Sensor 1)",
+  "P1166": "HO2S Bank 1 Sensor 1 Controller Adaptive Diagnosis Fault (Bank 1)",
+  "P1175": "Electronic Throttle System #2 Close Malfunction",
+  "P1330": "Spark Timing Adjust Malfunction",
+  "P1400": "Manifold Differential Pressure Sensor Circuit",
+  "P1553": "Idle Air Control Valve Closing Coil Circuit Open",
+  "P1750": "Automatic Transmission Shift - Pressure or Damper Clutch Solenoid Fault",
+  "P1605": "Rough Road Sensor Circuit",
+  "P1613": "ECU Self - Test Failed",
+  "P1623": "Diagnostic Lamp Power Stage Fault",
+  "P1624": "MIL On Request Signal Cooling Fan Relay Low Circuit",
+  "P1632": "Traction Control System Malfunction",
+  "P1625": "Cooling Fan Relay High Circuit"
 }

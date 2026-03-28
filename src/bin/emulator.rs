@@ -817,8 +817,40 @@ mod emulator {
 
                     // VIN editor
                     {
+                        const VIN_PRESETS: &[(&str, &str)] = &[
+                            ("Honda Accord 2003",         "1HGCM82633A004352"),
+                            ("Ford Mustang GT 2018",      "1FA6P8CF5J5100001"),
+                            ("Ford F-150 2014",           "1FTFW1ET5EFC00001"),
+                            ("Ford Focus 2011 (EU)",      "WF0XXXGBBXBR00001"),
+                            ("Opel Astra H 2007",         "W0L0AHL3574000001"),
+                            ("Opel Corsa D 2010",         "W0L0XCE75A4000001"),
+                            ("VW Golf VI 2010",           "WVWZZZ1KZAM000001"),
+                            ("VW Passat B7 2013",         "WVWZZZ3CZDE000001"),
+                            ("Audi A4 B8 2012",           "WAUZZZ8K5CA000001"),
+                            ("BMW 3 Series 2014",         "WBA3A5C55EF000001"),
+                            ("Mercedes C-Class 2008",     "WDBRF52H08F000001"),
+                            ("Toyota Corolla 2005",       "JTDBR32E050000001"),
+                            ("Toyota Camry 2015",         "4T1BF1FK5FU000001"),
+                            ("Nissan Altima 2012",        "1N4AL3AP5CC000001"),
+                            ("Renault Megane III 2011",   "VF1BZ0J0H50000001"),
+                            ("Peugeot 308 2014",          "VF3LBHNZHES000001"),
+                            ("Hyundai i30 2013",          "KMHD35LE8DU000001"),
+                            ("Subaru Impreza 2011",       "JF1GR7E62BG000001"),
+                            ("Chevrolet Silverado 2018",  "1GCVKNEC6JZ000001"),
+                            ("Dodge Charger 2015",        "2C3CDXHG9FH000001"),
+                        ];
+
                         let mut st = self.state.lock().unwrap();
                         ui.label(RichText::new("VIN").strong());
+                        egui::ComboBox::from_id_salt("vin_preset")
+                            .selected_text("Load preset…")
+                            .show_ui(ui, |ui| {
+                                for (label, vin) in VIN_PRESETS {
+                                    if ui.selectable_label(st.vin == *vin, *label).clicked() {
+                                        st.vin = vin.to_string();
+                                    }
+                                }
+                            });
                         ui.text_edit_singleline(&mut st.vin);
                     }
 
