@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <radialGradient id="bg" cx="40%" cy="35%" r="70%">
+      <stop offset="0%" stop-color="#1e2d48"/>
+      <stop offset="100%" stop-color="#080f1a"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Background -->
+  <circle cx="50" cy="50" r="50" fill="url(#bg)"/>
+  <circle cx="50" cy="50" r="47" fill="none" stroke="#1a2d4a" stroke-width="1.5"/>
+
+  <!--
+    Gauge arc: geometric center at (50, 58), radius 30.
+    Full track: 120deg to 60deg clockwise (300deg sweep, large arc).
+      Start (120deg): (35, 84)   End (60deg): (65, 84)
+    Active arc: 120deg to 310deg clockwise (190deg, large arc).
+      End (310deg): x=50+30*cos310=69, y=58+30*sin310=35
+  -->
+
+  <!-- Track -->
+  <path d="M 35 84 A 30 30 0 1 1 65 84"
+        fill="none" stroke="#0c1d30" stroke-width="10" stroke-linecap="round"/>
+
+  <!-- Active arc -->
+  <path d="M 35 84 A 30 30 0 1 1 69 35"
+        fill="none" stroke="#2979ff" stroke-width="10" stroke-linecap="round"/>
+
+  <!-- Glowing tip at end of active arc -->
+  <circle cx="69" cy="35" r="6" fill="#2979ff" opacity="0.35"/>
+  <circle cx="69" cy="35" r="3.5" fill="#82b1ff"/>
+
+  <!-- Needle from pivot (50, 58) toward 310deg, length 22 -->
+  <!--   tip:  x=50+22*cos310=64, y=58+22*sin310=41  -->
+  <!--   tail: x=50+7*cos130=45,  y=58+7*sin130=63   -->
+  <line x1="45" y1="63" x2="64" y2="41" stroke="#ff3b30" stroke-width="3.5" stroke-linecap="round"/>
+
+  <!-- Pivot hub -->
+  <circle cx="50" cy="58" r="7" fill="#1a5bbf"/>
+  <circle cx="50" cy="58" r="3.5" fill="#040a14"/>
+</svg>

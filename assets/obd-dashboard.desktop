@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=OBD-II Dashboard
+GenericName=OBD Diagnostic Tool
+Comment=Real-time OBD-II diagnostic dashboard with ELM327 support
+Exec=obd-dashboard
+Icon=obd-dashboard
+Categories=Utility;
+Keywords=obd;obd2;elm327;automotive;diagnostics;car;
+StartupNotify=true

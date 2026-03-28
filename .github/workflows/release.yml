@@ -28,6 +28,7 @@ jobs:
             os: ubuntu-latest
             artifact: obd-dashboard
             archive: obd-dashboard-linux-x86_64.tar.gz
+            package_linux: true
 
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
@@ -39,16 +40,19 @@ jobs:
             os: macos-15-intel
             artifact: obd-dashboard
             archive: obd-dashboard-macos-x86_64.tar.gz
+            dmg: obd-dashboard-macos-x86_64.dmg
 
           - target: aarch64-apple-darwin
             os: macos-14
             artifact: obd-dashboard
             archive: obd-dashboard-macos-aarch64.tar.gz
+            dmg: obd-dashboard-macos-aarch64.dmg
 
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             artifact: obd-dashboard.exe
             archive: obd-dashboard-windows-x86_64.zip
+            installer: obd-dashboard-windows-x86_64-setup.exe
 
     steps:
       - uses: actions/checkout@v4
@@ -80,12 +84,13 @@ jobs:
         if: matrix.cross
         run: cross build --release --target ${{ matrix.target }}
 
+      # ── Archive ─────────────────────────────────────────────────────────────
+
       - name: Package (Unix)
         if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
           tar czf ../../../${{ matrix.archive }} ${{ matrix.artifact }}
-          cd ../../..
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
@@ -93,11 +98,129 @@ jobs:
         run: |
           Compress-Archive -Path "target/${{ matrix.target }}/release/${{ matrix.artifact }}" -DestinationPath "${{ matrix.archive }}"
 
-      - name: Upload artifact
+      - name: Upload archive
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.archive }}
           path: ${{ matrix.archive }}
+
+      # ── Linux packages (x86_64 only) ─────────────────────────────────────
+
+      - name: Install Linux packaging tools
+        if: matrix.package_linux
+        run: |
+          cargo install cargo-deb --locked
+          cargo install cargo-generate-rpm --locked
+          wget -q "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
+          chmod +x appimagetool-x86_64.AppImage
+
+      - name: Package DEB
+        if: matrix.package_linux
+        run: cargo deb --no-build --target ${{ matrix.target }}
+
+      - name: Package RPM
+        if: matrix.package_linux
+        run: cargo generate-rpm --target ${{ matrix.target }}
+
+      - name: Package AppImage
+        if: matrix.package_linux
+        run: |
+          mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/scalable/apps
+          cp target/${{ matrix.target }}/release/obd-dashboard AppDir/usr/bin/
+          cp assets/obd-dashboard.desktop AppDir/
+          cp assets/obd-dashboard.svg AppDir/obd-dashboard.svg
+          cp assets/obd-dashboard.svg AppDir/usr/share/icons/hicolor/scalable/apps/obd-dashboard.svg
+          printf '#!/bin/sh\nexec "${APPDIR}/usr/bin/obd-dashboard" "$@"\n' > AppDir/AppRun
+          chmod +x AppDir/AppRun
+          ARCH=x86_64 ./appimagetool-x86_64.AppImage AppDir obd-dashboard-linux-x86_64.AppImage
+
+      - name: Upload DEB
+        if: matrix.package_linux
+        uses: actions/upload-artifact@v4
+        with:
+          name: obd-dashboard-linux-x86_64.deb
+          path: target/${{ matrix.target }}/debian/*.deb
+
+      - name: Upload RPM
+        if: matrix.package_linux
+        uses: actions/upload-artifact@v4
+        with:
+          name: obd-dashboard-linux-x86_64.rpm
+          path: target/${{ matrix.target }}/generate-rpm/*.rpm
+
+      - name: Upload AppImage
+        if: matrix.package_linux
+        uses: actions/upload-artifact@v4
+        with:
+          name: obd-dashboard-linux-x86_64.AppImage
+          path: obd-dashboard-linux-x86_64.AppImage
+
+      # ── macOS DMG ────────────────────────────────────────────────────────
+
+      - name: Package DMG
+        if: matrix.dmg
+        run: |
+          brew install librsvg
+
+          # Build .icns from SVG
+          mkdir -p icon.iconset
+          for size in 16 32 128 256 512; do
+            rsvg-convert -w $size -h $size assets/obd-dashboard.svg \
+              -o icon.iconset/icon_${size}x${size}.png
+            rsvg-convert -w $((size*2)) -h $((size*2)) assets/obd-dashboard.svg \
+              -o icon.iconset/icon_${size}x${size}@2x.png
+          done
+          iconutil -c icns icon.iconset -o AppIcon.icns
+
+          # Build .app bundle
+          mkdir -p "OBD-II Dashboard.app/Contents/MacOS" \
+                   "OBD-II Dashboard.app/Contents/Resources"
+          cp target/${{ matrix.target }}/release/obd-dashboard \
+             "OBD-II Dashboard.app/Contents/MacOS/"
+          cp assets/Info.plist "OBD-II Dashboard.app/Contents/"
+          cp AppIcon.icns "OBD-II Dashboard.app/Contents/Resources/"
+
+          hdiutil create \
+            -volname "OBD-II Dashboard" \
+            -srcfolder "OBD-II Dashboard.app" \
+            -ov -format UDZO \
+            "${{ matrix.dmg }}"
+
+      - name: Upload DMG
+        if: matrix.dmg
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.dmg }}
+          path: ${{ matrix.dmg }}
+
+      # ── Windows installer ────────────────────────────────────────────────
+
+      - name: Package installer
+        if: matrix.installer
+        shell: pwsh
+        run: |
+          # Build .ico from SVG using ImageMagick (available on windows-latest)
+          $sizes = @(256, 128, 64, 48, 32, 16)
+          foreach ($s in $sizes) {
+            magick -background none -resize "${s}x${s}" assets/obd-dashboard.svg "icon_${s}.png"
+          }
+          magick ($sizes | ForEach-Object { "icon_${_}.png" }) icon.ico
+
+          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
+          $version = $tag.TrimStart('v')
+          Copy-Item "target\${{ matrix.target }}\release\obd-dashboard.exe" "."
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" `
+            /DAppVersion=$version `
+            /DOutputDir=. `
+            /DOutputBaseFilename=obd-dashboard-windows-x86_64-setup `
+            assets\installer.iss
+
+      - name: Upload installer
+        if: matrix.installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.installer }}
+          path: ${{ matrix.installer }}
 
   release:
     name: Create Release

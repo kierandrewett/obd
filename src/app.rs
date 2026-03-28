@@ -537,34 +537,100 @@ impl ObdApp {
         if self.wake_lock.is_some() {
             return;
         }
-        // systemd-inhibit keeps the inhibit as long as the child process lives.
-        // We spawn `sleep infinity` under it; killing the child releases the lock.
-        match std::process::Command::new("systemd-inhibit")
-            .args([
-                "--what=idle",
-                "--who=OBD Dashboard",
-                "--why=Live OBD polling active",
-                "--mode=block",
-                "sleep",
-                "infinity",
-            ])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
+
+        #[cfg(target_os = "windows")]
         {
-            Ok(child) => {
-                self.wake_lock = Some(child);
-                self.add_log("[WAKE_LOCK] Screen sleep inhibited");
+            // ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
+            const ES_CONTINUOUS: u32 = 0x80000000;
+            const ES_SYSTEM_REQUIRED: u32 = 0x00000001;
+            const ES_DISPLAY_REQUIRED: u32 = 0x00000002;
+            #[link(name = "kernel32")]
+            extern "system" {
+                fn SetThreadExecutionState(flags: u32) -> u32;
             }
-            Err(e) => {
-                // Fallback: try caffeine / xdg-screensaver — but don't block on failure
-                self.add_log(&format!("[WAKE_LOCK] systemd-inhibit unavailable: {e}"));
+            unsafe {
+                SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
+            }
+            // Use a dummy child sentinel so release_wake_lock knows to clear it.
+            // On Windows we don't have a child process, so we use a no-op `cmd /c exit`.
+            if let Ok(child) = std::process::Command::new("cmd")
+                .args(["/c", "exit"])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+            {
+                self.wake_lock = Some(child);
+            }
+            self.add_log("[WAKE_LOCK] Screen sleep inhibited");
+            return;
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            // caffeinate -i: prevent idle sleep; lives until killed
+            match std::process::Command::new("caffeinate")
+                .arg("-i")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+            {
+                Ok(child) => {
+                    self.wake_lock = Some(child);
+                    self.add_log("[WAKE_LOCK] Screen sleep inhibited");
+                    return;
+                }
+                Err(e) => {
+                    self.add_log(&format!("[WAKE_LOCK] caffeinate unavailable: {e}"));
+                    return;
+                }
+            }
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            // systemd-inhibit keeps the inhibit as long as the child process lives.
+            match std::process::Command::new("systemd-inhibit")
+                .args([
+                    "--what=idle",
+                    "--who=OBD Dashboard",
+                    "--why=Live OBD polling active",
+                    "--mode=block",
+                    "sleep",
+                    "infinity",
+                ])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+            {
+                Ok(child) => {
+                    self.wake_lock = Some(child);
+                    self.add_log("[WAKE_LOCK] Screen sleep inhibited");
+                }
+                Err(e) => {
+                    self.add_log(&format!("[WAKE_LOCK] systemd-inhibit unavailable: {e}"));
+                }
             }
         }
     }
 
     fn release_wake_lock(&mut self) {
+        #[cfg(target_os = "windows")]
+        {
+            if self.wake_lock.is_some() {
+                const ES_CONTINUOUS: u32 = 0x80000000;
+                #[link(name = "kernel32")]
+                extern "system" {
+                    fn SetThreadExecutionState(flags: u32) -> u32;
+                }
+                unsafe {
+                    SetThreadExecutionState(ES_CONTINUOUS);
+                }
+            }
+        }
+
         if let Some(mut child) = self.wake_lock.take() {
             let _ = child.kill();
             let _ = child.wait();
