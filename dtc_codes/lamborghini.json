@@ -18,5 +18,7 @@
   "P1515": "A/T to M/T codification",
   "P1552": "Idle air control valve opening coil low voltage",
   "P1743": "Torque converter clutch solenoid circuit fault",
-  "P1797": "Clutch pedal switch (MT) - or - P/N switch circuit fault"
+  "P1797": "Clutch pedal switch (MT) - or - P/N switch circuit fault",
+  "P1410": "EVAP purge control solenoid circuit high voltage",
+  "P1449": "Canister drain cut valve solenoid circuit fault"
 }

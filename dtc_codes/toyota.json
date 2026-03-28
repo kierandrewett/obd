@@ -511,5 +511,13 @@
   "U0126": "Lost Communication with Steering Angle Sensor Module",
   "U0131": "Lost Communication with Power Steering Control Module",
   "U0164": "Lost Communication with A/C ECU",
-  "U0151": "Lost Communication with Airbag ECU"
+  "U0151": "Lost Communication with Airbag ECU",
+  "P1405": "Turbo Pressure Sensor Circuit Malfunction",
+  "P1410": "EGR Valve Position Sensor Circuit Malfunction",
+  "P1415": "Air Pump Circuit Malfunction/(AIR) System Bank 1/58",
+  "P1421": "Evaporative Emission Canister Gross Leak",
+  "P1437": "Toyota-HCAC-System By-Pass Valve Close Malfunction",
+  "P1453": "Fuel Tank Pressure Sensor High Input",
+  "P1416": "Port Air Circuit Malfunction/(AIR) System Bank 2/58",
+  "U029A": "Lost Communication with Hybrid Battery Pack Sensor module"
 }

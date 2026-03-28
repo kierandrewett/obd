@@ -56,5 +56,14 @@
   "P1791": "Vehicle Speed Sensor (VSS) Range/Performance Problem",
   "P1792": "Problem in Engine Coolant Temperature (ECT) Sensor Circuit",
   "P1734": "Problem in Shift Control System: Shift Solenoid Valves B and C Stuck ON,or Shift Valves B and C Stuck",
-  "P1793": "Manifold Absolute Pressure Sensor Circuit"
+  "P1793": "Manifold Absolute Pressure Sensor Circuit",
+  "P1410": "Air Pump Malfunction (Air system)",
+  "P1415": "Air Pump Electric Current Sensor Circuit Low Voltage (Air system)",
+  "P1439": "Motor Drive Module (MDM) Short Circuit Sensor Problem,or Motor Drive Module (MDM) Short Circuit",
+  "P1448": "Battery Module Overheating",
+  "P1445": "Bypass Control Problem",
+  "P1449": "Battery Module Overheating,or Battery Cell Overheating,or Battery Module Individual Voltage Input Deviation,or Battery",
+  "P1459": "Evaporative Emission (EVAP) Purge Flow Switch Malfunction",
+  "P1491": "Exhaust Gas Recirculation (EGR) Valve Insufficient Lift (EGR)",
+  "P1416": "Air Pump Electric Current Sensor Circuit High Voltage (Air system)"
 }

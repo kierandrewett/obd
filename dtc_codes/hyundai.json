@@ -18,5 +18,6 @@
   "P1529": "Customer Snapshot Request VIA CAN",
   "P1552": "Idle Air Control Valve Closing Coil Circuit Shorted",
   "P1586": "Encoding Signal Circuit Not Rationale",
-  "P1715": "Automatic Transmission Pulse Generator A Circuit"
+  "P1715": "Automatic Transmission Pulse Generator A Circuit",
+  "P1443": "EVAP System Fault (Fuel Tank Cap Missing)"
 }

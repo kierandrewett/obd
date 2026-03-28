@@ -69,5 +69,13 @@
   "P1560": "TCS, Test Signal Low",
   "P1561": "TCS, Test Signal High",
   "P1585": "Fuel Level Less Than 10 Litres",
-  "P1551": "Idle Air Control Valve, Close Function, Control Module Output, Open Circuit"
+  "P1551": "Idle Air Control Valve, Close Function, Control Module Output, Open Circuit",
+  "P1410": "EVAP Canister Purge Valve, Control Module Output Short To B+",
+  "P1445": "Canister Close Valve Circuit. Short to B+ .",
+  "P1444": "Canister Close Valve Circuit. Open/short to Ground.",
+  "P1453": "EVAP Tank Pressure Sensor. Value too low when Depressurized.",
+  "P1460": "Immobilizer Active",
+  "P1450": "A/C Relay, Control Module Output Low, Open Or Short To Ground",
+  "P1492": "EVAP Tank Pressure Sens. Value too low when Depressurised and malfunctional fuel level sen",
+  "P1491": "EVAP Tank Pressure Sensor. Performance Problem and malfunctional fuel level sensor."
 }

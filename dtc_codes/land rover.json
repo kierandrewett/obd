@@ -40,5 +40,7 @@
   "P1708": "Transfer Box Line Short Circuit Fault",
   "P1703": "Transfer Box Line Open Circuit Fault",
   "P1776": "Gearbox Ignition Retard Request Timeout Fault",
-  "P1775": "Gearbox Fault"
+  "P1775": "Gearbox Fault",
+  "P1447": "Evap System Purge Valve Open or Short Circuit Fault",
+  "P1448": "Evap System Purge Valve Flow 2 Fault"
 }

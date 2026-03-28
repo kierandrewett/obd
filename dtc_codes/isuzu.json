@@ -20,5 +20,8 @@
   "P1508": "IAC System RPM Low",
   "P1509": "IAC System RPM High",
   "P1548": "A/C Compressor Clutch Output Circuit Malfunction",
-  "P1792": "Trans EEPROM Checksum Error"
+  "P1792": "Trans EEPROM Checksum Error",
+  "P1404": "EGR Valve Stuck Closed",
+  "P1459": "EVAP Emission Purge Flow Switch Malfunction",
+  "P1491": "EGR Valve Lift Insufficient Detected"
 }

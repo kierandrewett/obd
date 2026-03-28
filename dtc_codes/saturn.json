@@ -24,5 +24,6 @@
   "P1584": "Speed Control Disabled",
   "P1516": "Command V Actual Throttle Position Correlation Error",
   "P1599": "Engine Stall Detected",
-  "P1780": "MIL"
+  "P1780": "MIL",
+  "P1404": "EGR Closed Position Error (1997)"
 }

@@ -68,5 +68,8 @@
   "P1791": "A/T Concerns",
   "P1792": "TRANS EEPROM Checksum Error",
   "P1795": "A/T Concerns",
-  "P1793": "A/T Concerns"
+  "P1793": "A/T Concerns",
+  "P1404": "EGR Stuck Closed",
+  "P1459": "EVAP Emission Purge Flow Switch Malfunction",
+  "P1491": "EGR valve Lift Insufficient Detected"
 }

@@ -92,5 +92,20 @@
   "P1715": "Shift Solenoid 2 Mechanical Fault",
   "P1797": "P/N Switch Open or Short Circuit",
   "P1749": "Electronic Pressure Control Solenoid Circuit Low",
-  "P1762": "Transmission SS3/SS4/OD Band Fault"
+  "P1762": "Transmission SS3/SS4/OD Band Fault",
+  "P1408": "EGR System Flow Out of Key On Engine Running Self Test Range",
+  "P1409": "EGR Vacuum Regulator Solenoid Circuit",
+  "P1405": "DPFE Sensor Upstream Hose Off Or Plugged",
+  "P1410": "EGR Boost Solenoid Valve Stuck",
+  "P1446": "EVAP Purge Flow Sensor Circuit High Voltage",
+  "P1443": "EVAP System Purge Flow Fault",
+  "P1444": "EVAP Purge Flow Sensor Circuit Low Voltage",
+  "P1449": "CDCV or Throttle PositionCV Circuit",
+  "P1460": "Wide Open Throttle A/C Cut-Off Relay Circuit",
+  "P1464": "Air Conditioning Control Signal Circuit",
+  "P1474": "Fan Control (Primary Winding) Circuit",
+  "P1479": "Fan Control (Condenser Primary) Circuit",
+  "P1450": "EVAP Control System Fault",
+  "P1496": "EGR Valve Motor Coil 1 Open or Shorted",
+  "P1499": "EGR Valve Motor Coil 4 Open or Shorted"
 }

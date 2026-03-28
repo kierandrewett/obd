@@ -1,5 +1,9 @@
 {
   "P1700": "TCM Throttle Position Sensor Circuit Fault",
   "P1705": "TCM ECT Sensor Circuit Fault",
-  "P1715": "PNP Switch Circuit Fault"
+  "P1715": "PNP Switch Circuit Fault",
+  "P1408": "Maniforld Differential Pressure Sensor Circuit Fault",
+  "P1410": "Fuel Tank Pressure Control Solenoid Circuit Fault",
+  "P1460": "Radiator Fan Control System Fault",
+  "P1450": "Barometric Pressure Sensor Too Low Or Too High"
 }

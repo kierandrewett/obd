@@ -33,5 +33,6 @@
   "P1155": "Air/Fuel Ratio Sensor Heater Circuit Malfunction (Bank 1 Sensor 1)",
   "P1520": "Stop Lamp Switch Malfunction",
   "P1566": "Cruise Control Main Switch Circuit Malfunction",
-  "P1780": "PNP Switch Malfunction"
+  "P1780": "PNP Switch Malfunction",
+  "P1410": "EGR Valve Position Sensor Circuit Malfunction"
 }

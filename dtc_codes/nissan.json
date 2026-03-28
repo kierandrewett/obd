@@ -53,5 +53,15 @@
   "P1760": "Overrun Clutch S/V",
   "P1780": "Shift Change Signal",
   "P1776": "Torque Converter Clutch Solenoid Valve",
-  "P1775": "Torque Converter Clutch Solenoid Valve"
+  "P1775": "Torque Converter Clutch Solenoid Valve",
+  "P1447": "EVAP Control System Purge Flow Monitoring",
+  "P1448": "Vent Control Valve",
+  "P1446": "Vent Control Valve",
+  "P1445": "Purge Volume Control/V",
+  "P1443": "Canister Control Vacuum Check Switch",
+  "P1444": "Purge Volume Control/V",
+  "P1464": "Fuel Level Sensor Circuit -Ground Signal",
+  "P1490": "VC/V BypasS/V",
+  "P1492": "Purge Control/V S/V",
+  "P1491": "VC Cut/V BypasS/V"
 }

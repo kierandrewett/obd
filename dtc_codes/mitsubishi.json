@@ -13,5 +13,12 @@
   "P1105": "Fuel pressure solenoid circuit fault",
   "P1101": "Traction control vacuum solenoid circuit fault",
   "P1791": "PCM ECT level signal to TCM circuit fault",
-  "P1715": "TCM pulse generator circuit fault"
+  "P1715": "TCM pulse generator circuit fault",
+  "U1100": "Engine CAN Timeout/Not equipped",
+  "P1443": "EVAP purge control solenoid 2 circuit fault",
+  "P1490": "Low speed fan control relay fault",
+  "P1492": "Battery temperature sensor high voltage",
+  "P1494": "EVAP ventilation switch or mechanical fault",
+  "P1495": "EVAP ventilation solenoid circuit fault",
+  "P1496": "5 Volt supply output too low"
 }

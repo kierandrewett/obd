@@ -35,5 +35,8 @@
   "P1760": "System voltage,ignition - out of limits",
   "P1780": "Throttle position (TP) sensor,traction control - circuit malfunction",
   "P1781": "CAN data bus,ECM actual torque signal - malfunction detected",
-  "P1792": "CAN data bus,ECMITCM communication - malfunction detected"
+  "P1792": "CAN data bus,ECMITCM communication - malfunction detected",
+  "P1405": "Exhaust gas recirculation (EGR) valve position sensor - malfunction",
+  "P1410": "Secondary air injection (AIR) pump relay - circuit malfunction",
+  "P1404": "Exhaust gas recirculation (EGR) valve - range/performance problem"
 }

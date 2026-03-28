@@ -81,5 +81,12 @@
   "P1795": "Inconsistent CAN Level",
   "P1793": "Ignition Supply Malfunction",
   "P1797": "CAN TCM/ECM Circuit Malfunction",
-  "P1775": "Transmission System MIL Fault"
+  "P1775": "Transmission System MIL Fault",
+  "P1408": "Exhaust Gas Recirculation Thermister",
+  "P1409": "Exhaust Gas Recirculation Valve Circuit",
+  "P1447": "ELC System Closure Valve Flow",
+  "P1448": "ELC System System 2",
+  "P1453": "Fuel Tank Pressure Relief Valve Malfunction",
+  "P1475": "Fan Relay (Low) Circuit",
+  "P1476": "Fan Relay (High) Circuit"
 }

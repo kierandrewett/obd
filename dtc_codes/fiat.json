@@ -58,5 +58,13 @@
   "P1705": "Auto transmission RPM Regulation",
   "P1712": "Lever Release solenoid",
   "P1713": "Neutral Signal to engine ECU",
-  "P1722": "Idle Increase Signal to Engine ECU"
+  "P1722": "Idle Increase Signal to Engine ECU",
+  "U1715": "Tensione batteria",
+  "U2003": "Sistema audio - unita CD/DJ non risponde",
+  "P1408": "Coolant heating circuit",
+  "P1404": "Circuit TL4226",
+  "P1421": "Catalytic converter 1 temperature",
+  "P1429": "Pressure sensor discharging",
+  "P1448": "Particle filter (FAP)",
+  "P1446": "Additive"
 }
