@@ -127,6 +127,7 @@ pub struct ObdApp {
     stored_dtcs: Vec<Dtc>,
     pending_dtcs: Vec<Dtc>,
     dtc_status: String,
+    clear_dtc_confirm: bool,
 
     // Freeze frame
     freeze_data: Vec<(String, ObdValue, String)>,
@@ -193,6 +194,7 @@ impl ObdApp {
             stored_dtcs: Vec::new(),
             pending_dtcs: Vec::new(),
             dtc_status: String::new(),
+            clear_dtc_confirm: false,
             freeze_data: Vec::new(),
             freeze_frame_read: false,
             vin: None,
@@ -372,6 +374,25 @@ impl ObdApp {
 
     fn send_cmd(&self, cmd: OdbCmd) {
         let _ = self.cmd_tx.send(cmd);
+    }
+
+    /// Check if engine appears to be running based on RPM > 0
+    fn engine_running(&self) -> bool {
+        self.live_data
+            .get("010C")
+            .is_some_and(|s| s.numeric_value > 0.0)
+    }
+
+    fn show_engine_warning(&self, ui: &mut egui::Ui) {
+        if self.live_running && !self.engine_running() && !self.live_data.is_empty() {
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("Engine not running - RPM is 0. Sensor data may be unavailable or inaccurate.")
+                        .color(Color32::from_rgb(220, 180, 50)),
+                );
+            });
+            ui.add_space(2.0);
+        }
     }
 
     // ── UI Sections ─────────────────────────────────────────────────────────
@@ -729,6 +750,7 @@ impl ObdApp {
             );
         });
 
+        self.show_engine_warning(ui);
         ui.add_space(4.0);
 
         let avail = ui.available_size();
@@ -1022,7 +1044,7 @@ impl ObdApp {
                 .button(RichText::new("Clear DTCs").color(Color32::from_rgb(220, 50, 50)))
                 .clicked()
             {
-                self.send_cmd(OdbCmd::ClearDtcs);
+                self.clear_dtc_confirm = true;
             }
             if !self.dtc_status.is_empty() {
                 ui.label(RichText::new(&self.dtc_status).color(Color32::from_gray(140)));
@@ -1171,64 +1193,183 @@ impl ObdApp {
             if ui.button("Query Supported PIDs").clicked() {
                 self.send_cmd(OdbCmd::QuerySupportedPids);
             }
+            if ui.button("Read DTCs").clicked() {
+                self.send_cmd(OdbCmd::ReadDtcs);
+            }
         });
-        ui.add_space(12.0);
 
-        egui::Grid::new("vehicle_info_grid")
-            .num_columns(2)
-            .spacing([20.0, 8.0])
-            .show(ui, |ui| {
-                ui.label(RichText::new("VIN:").strong());
-                ui.label(if self.vin.is_some() {
-                    RichText::new(self.vin.as_deref().unwrap_or("")).monospace()
-                } else {
-                    RichText::new("Not read")
-                        .monospace()
-                        .color(Color32::from_gray(140))
-                });
-                ui.end_row();
-
-                if let Some(info) = &self.connection_info {
-                    ui.label(RichText::new("ELM Version:").strong());
-                    ui.label(&info.elm_version);
-                    ui.end_row();
-
-                    ui.label(RichText::new("Protocol:").strong());
-                    ui.label(&info.protocol);
-                    ui.end_row();
-
-                    ui.label(RichText::new("Port:").strong());
-                    ui.label(&info.port);
-                    ui.end_row();
-
-                    ui.label(RichText::new("Baud Rate:").strong());
-                    ui.label(format!("{}", info.baud));
-                    ui.end_row();
-                }
-
-                if let Some(v) = &self.voltage {
-                    ui.label(RichText::new("Battery Voltage:").strong());
-                    ui.label(v);
-                    ui.end_row();
-                }
-            });
-
-        if !self.supported_pids.is_empty() {
+        egui::ScrollArea::vertical().show(ui, |ui| {
             ui.add_space(12.0);
-            ui.heading(RichText::new("Supported PIDs").color(Color32::from_gray(180)));
+
+            // ── Vehicle section ─────────────────────────────────────
+            ui.heading("Vehicle");
             ui.add_space(4.0);
+            egui::Grid::new("vehicle_grid")
+                .num_columns(2)
+                .spacing([20.0, 6.0])
+                .show(ui, |ui| {
+                    ui.label(RichText::new("VIN:").strong());
+                    if let Some(vin) = &self.vin {
+                        ui.label(RichText::new(vin).monospace());
+                    } else {
+                        ui.label(RichText::new("Not read").color(Color32::from_gray(140)));
+                    }
+                    ui.end_row();
 
-            let pid_names: HashMap<u8, &str> = self
-                .pid_defs
-                .iter()
-                .filter_map(|p| {
-                    u8::from_str_radix(&p.cmd[2..4], 16)
-                        .ok()
-                        .map(|pid| (pid, p.description))
-                })
-                .collect();
+                    if let Some(vin) = &self.vin {
+                        let info = crate::vin_decoder::decode(vin);
+                        if info.make != "Unknown" {
+                            ui.label(RichText::new("Make:").strong());
+                            ui.label(&info.make);
+                            ui.end_row();
+                        }
+                        if info.country != "Unknown" {
+                            ui.label(RichText::new("Country:").strong());
+                            ui.label(&info.country);
+                            ui.end_row();
+                        }
+                        if let Some(year) = &info.year {
+                            ui.label(RichText::new("Model Year:").strong());
+                            ui.label(year);
+                            ui.end_row();
+                        }
+                        ui.label(RichText::new("WMI:").strong());
+                        ui.label(RichText::new(&info.wmi).monospace());
+                        ui.end_row();
+                    }
 
-            egui::ScrollArea::vertical().show(ui, |ui| {
+                    if let Some(v) = &self.voltage {
+                        ui.label(RichText::new("Battery Voltage:").strong());
+                        ui.label(v);
+                        ui.end_row();
+                    }
+                });
+
+            ui.add_space(16.0);
+
+            // ── Adapter section ─────────────────────────────────────
+            ui.heading("Adapter");
+            ui.add_space(4.0);
+            if let Some(info) = &self.connection_info {
+                egui::Grid::new("adapter_grid")
+                    .num_columns(2)
+                    .spacing([20.0, 6.0])
+                    .show(ui, |ui| {
+                        ui.label(RichText::new("ELM Version:").strong());
+                        ui.label(&info.elm_version);
+                        ui.end_row();
+
+                        ui.label(RichText::new("Protocol:").strong());
+                        ui.label(&info.protocol);
+                        ui.end_row();
+
+                        ui.label(RichText::new("Port:").strong());
+                        ui.label(RichText::new(&info.port).monospace());
+                        ui.end_row();
+
+                        ui.label(RichText::new("Baud Rate:").strong());
+                        ui.label(format!("{} baud", info.baud));
+                        ui.end_row();
+                    });
+            }
+
+            ui.add_space(16.0);
+
+            // ── DTC summary section ─────────────────────────────────
+            ui.heading("Diagnostics");
+            ui.add_space(4.0);
+            egui::Grid::new("diag_grid")
+                .num_columns(2)
+                .spacing([20.0, 6.0])
+                .show(ui, |ui| {
+                    ui.label(RichText::new("Stored DTCs:").strong());
+                    if self.stored_dtcs.is_empty() {
+                        ui.label(RichText::new("None").color(Color32::from_rgb(50, 200, 80)));
+                    } else {
+                        ui.label(
+                            RichText::new(format!("{}", self.stored_dtcs.len()))
+                                .color(Color32::from_rgb(220, 50, 50))
+                                .strong(),
+                        );
+                    }
+                    ui.end_row();
+
+                    ui.label(RichText::new("Pending DTCs:").strong());
+                    if self.pending_dtcs.is_empty() {
+                        ui.label(RichText::new("None").color(Color32::from_rgb(50, 200, 80)));
+                    } else {
+                        ui.label(
+                            RichText::new(format!("{}", self.pending_dtcs.len()))
+                                .color(Color32::from_rgb(220, 180, 50))
+                                .strong(),
+                        );
+                    }
+                    ui.end_row();
+
+                    // Status from Mode 01 PID 01 if available
+                    if let Some(state) = self.live_data.get("0101") {
+                        ui.label(RichText::new("MIL Status:").strong());
+                        ui.label(format!("{}", state.value));
+                        ui.end_row();
+                    }
+
+                    if let Some(state) = self.live_data.get("011C") {
+                        ui.label(RichText::new("OBD Standard:").strong());
+                        ui.label(format!("{}", state.value));
+                        ui.end_row();
+                    }
+
+                    if let Some(state) = self.live_data.get("0151") {
+                        ui.label(RichText::new("Fuel Type:").strong());
+                        ui.label(format!("{}", state.value));
+                        ui.end_row();
+                    }
+
+                    if let Some(state) = self.live_data.get("011F") {
+                        let secs = state.numeric_value;
+                        let hours = (secs / 3600.0) as u32;
+                        let mins = ((secs % 3600.0) / 60.0) as u32;
+                        ui.label(RichText::new("Run Time:").strong());
+                        ui.label(format!("{}h {}m", hours, mins));
+                        ui.end_row();
+                    }
+
+                    if let Some(state) = self.live_data.get("0131") {
+                        ui.label(RichText::new("Distance Since Clear:").strong());
+                        ui.label(format!("{:.0} km", state.numeric_value));
+                        ui.end_row();
+                    }
+
+                    if let Some(state) = self.live_data.get("0130") {
+                        ui.label(RichText::new("Warm-ups Since Clear:").strong());
+                        ui.label(format!("{:.0}", state.numeric_value));
+                        ui.end_row();
+                    }
+                });
+
+            ui.add_space(16.0);
+
+            // ── Supported PIDs section ────────────────────────────
+            if !self.supported_pids.is_empty() {
+                ui.heading("Supported PIDs");
+                ui.add_space(4.0);
+
+                ui.label(format!(
+                    "{} PIDs supported by this vehicle",
+                    self.supported_pids.len()
+                ));
+                ui.add_space(4.0);
+
+                let pid_names: HashMap<u8, &str> = self
+                    .pid_defs
+                    .iter()
+                    .filter_map(|p| {
+                        u8::from_str_radix(&p.cmd[2..4], 16)
+                            .ok()
+                            .map(|pid| (pid, p.description))
+                    })
+                    .collect();
+
                 ui.horizontal_wrapped(|ui| {
                     for &pid in &self.supported_pids {
                         let name = pid_names.get(&pid).unwrap_or(&"");
@@ -1236,14 +1377,13 @@ impl ObdApp {
                         ui.label(
                             RichText::new(label)
                                 .monospace()
-                                .color(Color32::from_rgb(80, 160, 220))
-                                .background_color(Color32::from_gray(30)),
+                                .color(Color32::from_rgb(80, 160, 220)),
                         )
                         .on_hover_text(*name);
                     }
                 });
-            });
-        }
+            }
+        });
     }
 
     fn show_log(&mut self, ui: &mut egui::Ui) {
@@ -1361,5 +1501,45 @@ impl eframe::App for ObdApp {
             Tab::FreezeFrame => self.show_freeze_frame(ui),
             Tab::VehicleInfo => self.show_vehicle_info(ui),
         });
+
+        // Clear DTCs confirmation modal
+        if self.clear_dtc_confirm {
+            egui::Window::new("Clear Trouble Codes")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new("Are you sure you want to clear all DTCs?")
+                            .strong()
+                            .size(15.0),
+                    );
+                    ui.add_space(8.0);
+                    ui.label("This will:");
+                    ui.label("  - Clear all stored diagnostic trouble codes");
+                    ui.label("  - Clear all pending trouble codes");
+                    ui.label("  - Reset the MIL (Check Engine Light)");
+                    ui.label("  - Erase freeze frame data");
+                    ui.label("  - Reset I/M readiness monitors");
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button(
+                                RichText::new("Yes, Clear All")
+                                    .color(Color32::from_rgb(220, 50, 50)),
+                            )
+                            .clicked()
+                        {
+                            self.send_cmd(OdbCmd::ClearDtcs);
+                            self.clear_dtc_confirm = false;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            self.clear_dtc_confirm = false;
+                        }
+                    });
+                    ui.add_space(4.0);
+                });
+        }
     }
 }
