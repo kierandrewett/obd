@@ -149,6 +149,9 @@ pub struct ObdApp {
 
     // Log file writer
     log_file: Arc<Mutex<std::fs::File>>,
+
+    // Screen wake lock (child process handle)
+    wake_lock: Option<std::process::Child>,
 }
 
 struct LivePidState {
@@ -200,6 +203,7 @@ impl ObdApp {
             poll_config: PollConfig::default(),
             pid_defs,
             log_file,
+            wake_lock: None,
         }
     }
 
@@ -236,6 +240,7 @@ impl ObdApp {
                     self.live_running = false;
                     self.connection_info = None;
                     self.connection_status = "Disconnected".to_string();
+                    self.release_wake_lock();
                     self.add_log("[DISCONNECTED]");
                 }
                 ObdEvent::LiveData { pid_cmd, name, value, unit, raw } => {
@@ -475,6 +480,51 @@ impl ObdApp {
         self.send_cmd(OdbCmd::SetPollConfig(self.poll_config.clone()));
         self.send_cmd(OdbCmd::StartLiveData);
         self.live_running = true;
+        self.acquire_wake_lock();
+    }
+
+    fn stop_polling(&mut self) {
+        self.send_cmd(OdbCmd::StopLiveData);
+        self.live_running = false;
+        self.release_wake_lock();
+    }
+
+    fn acquire_wake_lock(&mut self) {
+        if self.wake_lock.is_some() {
+            return;
+        }
+        // systemd-inhibit keeps the inhibit as long as the child process lives.
+        // We spawn `sleep infinity` under it; killing the child releases the lock.
+        match std::process::Command::new("systemd-inhibit")
+            .args([
+                "--what=idle",
+                "--who=OBD Dashboard",
+                "--why=Live OBD polling active",
+                "--mode=block",
+                "sleep", "infinity",
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(child) => {
+                self.wake_lock = Some(child);
+                self.add_log("[WAKE_LOCK] Screen sleep inhibited");
+            }
+            Err(e) => {
+                // Fallback: try caffeine / xdg-screensaver — but don't block on failure
+                self.add_log(&format!("[WAKE_LOCK] systemd-inhibit unavailable: {e}"));
+            }
+        }
+    }
+
+    fn release_wake_lock(&mut self) {
+        if let Some(mut child) = self.wake_lock.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+            self.add_log("[WAKE_LOCK] Screen sleep re-enabled");
+        }
     }
 
     fn show_dashboard(&mut self, ui: &mut egui::Ui) {
@@ -510,20 +560,30 @@ impl ObdApp {
 
                 ui.add_space(16.0);
 
-                // Poll mode selector underneath
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Mode:").color(Color32::from_gray(140)));
-                    let mode = &mut self.poll_config.mode;
-                    if ui.selectable_label(*mode == PollMode::Minimal, "Minimal").clicked() {
-                        *mode = PollMode::Minimal;
-                    }
-                    if ui.selectable_label(*mode == PollMode::Fast, "Fast").clicked() {
-                        *mode = PollMode::Fast;
-                    }
-                    if ui.selectable_label(*mode == PollMode::Full, "Full").clicked() {
-                        *mode = PollMode::Full;
-                    }
-                });
+                // Poll mode selector - centered using columns trick
+                let mode_width = 250.0;
+                let avail = ui.available_width();
+                if avail > mode_width {
+                    ui.add_space(0.0); // force layout
+                }
+                ui.allocate_ui_with_layout(
+                    egui::vec2(mode_width, 24.0),
+                    egui::Layout::left_to_right(egui::Align::Center)
+                        .with_main_justify(true),
+                    |ui| {
+                        ui.label(RichText::new("Mode:").color(Color32::from_gray(140)));
+                        let mode = &mut self.poll_config.mode;
+                        if ui.selectable_label(*mode == PollMode::Minimal, "Minimal").clicked() {
+                            *mode = PollMode::Minimal;
+                        }
+                        if ui.selectable_label(*mode == PollMode::Fast, "Fast").clicked() {
+                            *mode = PollMode::Fast;
+                        }
+                        if ui.selectable_label(*mode == PollMode::Full, "Full").clicked() {
+                            *mode = PollMode::Full;
+                        }
+                    },
+                );
 
                 ui.add_space(8.0);
                 ui.label(
@@ -537,8 +597,7 @@ impl ObdApp {
         // Controls bar when running
         ui.horizontal(|ui| {
             if ui.button(RichText::new("Stop").color(Color32::from_rgb(220, 50, 50))).clicked() {
-                self.send_cmd(OdbCmd::StopLiveData);
-                self.live_running = false;
+                self.stop_polling();
             }
 
             ui.separator();
@@ -733,12 +792,11 @@ impl ObdApp {
         ui.horizontal(|ui| {
             if self.live_running {
                 if ui.button("Stop").clicked() {
-                    self.send_cmd(OdbCmd::StopLiveData);
-                    self.live_running = false;
+                    self.stop_polling();
                 }
             } else {
                 if ui.button("Start").clicked() {
-                    self.send_cmd(OdbCmd::StartLiveData);
+                    self.start_polling();
                     self.live_running = true;
                 }
             }
