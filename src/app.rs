@@ -130,6 +130,7 @@ pub struct ObdApp {
 
     // Freeze frame
     freeze_data: Vec<(String, ObdValue, String)>,
+    freeze_frame_read: bool,
 
     // Vehicle info
     vin: Option<String>,
@@ -193,6 +194,7 @@ impl ObdApp {
             pending_dtcs: Vec::new(),
             dtc_status: String::new(),
             freeze_data: Vec::new(),
+            freeze_frame_read: false,
             vin: None,
             voltage: None,
             active_tab: Tab::Dashboard,
@@ -1093,15 +1095,30 @@ impl ObdApp {
 
         if ui.button("Read Freeze Frame").clicked() {
             self.freeze_data.clear();
+            self.freeze_frame_read = true;
             self.send_cmd(OdbCmd::ReadFreezeFrame);
         }
         ui.add_space(8.0);
 
         if self.freeze_data.is_empty() {
-            ui.label(
-                RichText::new("No freeze frame data. Click 'Read Freeze Frame' to fetch.")
-                    .color(Color32::from_gray(120)),
-            );
+            if self.freeze_frame_read {
+                ui.label(
+                    RichText::new("No freeze frame data available.").color(Color32::from_gray(140)),
+                );
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(
+                        "Freeze frame data is only captured when a DTC (trouble code) is stored. \
+                        If your car has no active DTCs, the freeze frame buffer will be empty.",
+                    )
+                    .color(Color32::from_gray(100)),
+                );
+            } else {
+                ui.label(
+                    RichText::new("Click 'Read Freeze Frame' to fetch snapshot data.")
+                        .color(Color32::from_gray(120)),
+                );
+            }
         } else {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 egui_extras::TableBuilder::new(ui)
