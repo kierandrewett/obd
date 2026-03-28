@@ -1,0 +1,20 @@
+[package]
+name = "obd-dashboard"
+version = "0.1.0"
+edition = "2024"
+description = "OBD-II diagnostic dashboard with ELM327 support"
+
+[dependencies]
+eframe = { version = "0.31", features = ["default"] }
+egui = "0.31"
+egui_extras = "0.31"
+serialport = "4.7"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+chrono = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = 2
+lto = true
