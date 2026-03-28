@@ -11,16 +11,56 @@ readme = "README.md"
 keywords = ["obd", "obd2", "elm327", "automotive", "diagnostics"]
 categories = ["gui", "hardware-support"]
 
+[lib]
+name = "obd_dashboard"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "obd-dashboard"
+path = "src/main.rs"
+
+[[bin]]
+name = "obd-emulator"
+path = "src/bin/emulator.rs"
+
 [dependencies]
 eframe = { version = "0.31", features = ["default"] }
 egui = "0.31"
 egui_extras = "0.31"
-serialport = "4.7"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 chrono = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+serialport = "4.7"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+libc = "0.2"
+tungstenite = "0.24"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "Window",
+    "Navigator",
+    "Document",
+    "Element",
+    "HtmlCanvasElement",
+    "console",
+    "ReadableStream",
+    "ReadableStreamDefaultReader",
+    "WritableStream",
+    "WritableStreamDefaultWriter",
+    "WebSocket",
+    "MessageEvent",
+    "CloseEvent",
+] }
+gloo-timers = { version = "0.3", features = ["futures"] }
+futures = { version = "0.3", default-features = false, features = ["alloc"] }
+console_error_panic_hook = "0.1"
+tracing-wasm = "0.2"
 
 [package.metadata.deb]
 section = "utils"

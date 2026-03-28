@@ -1,0 +1,22 @@
+{
+  "P1345": "No SGC (CMP) signal to PCM",
+  "P1215": "Fuel injector 3 circuit high voltage",
+  "P1214": "Fuel injector 2 circuit high voltage",
+  "P1216": "Fuel injector 4 circuit high voltage",
+  "P1225": "Fuel injector 1 circuit low voltage",
+  "P1227": "Fuel injector 3 circuit low voltage",
+  "P1102": "HO2S - 11 heater circuit high voltage",
+  "P1105": "HO2S - 12 heater circuit high voltage",
+  "P1117": "HO2S - 12 heater circuit low voltage",
+  "P1127": "Long term fuel trim multiplicative air system low",
+  "P1128": "Long term fuel trim multiplicative air system high",
+  "P1140": "Load calculation cross check",
+  "P1170": "HO2S - 11 circuit voltage stuck at Mid - range",
+  "P1124": "Long term fuel trim adaptive air system high",
+  "P1196": "Ignition switch start circuit fault",
+  "P1513": "Idle air control valve closing coil low voltage",
+  "P1515": "A/T to M/T codification",
+  "P1552": "Idle air control valve opening coil low voltage",
+  "P1743": "Torque converter clutch solenoid circuit fault",
+  "P1797": "Clutch pedal switch (MT) - or - P/N switch circuit fault"
+}

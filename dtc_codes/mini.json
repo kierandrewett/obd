@@ -1,0 +1,18 @@
+{
+  "C1000": "Vehicle Speed Information Circuit Malfunction",
+  "P1321": "Flywheel adaptation for misfire detection - performance",
+  "P1212": "Exhaust gas recirculation (EGR) valve actuator - circuit high",
+  "P1222": "Accelerator pedal position (APP) sensor 2 - low input",
+  "P1223": "Accelerator pedal position (APP) sensor 2 - high input",
+  "P1224": "Accelerator pedal position (APP) sensor 1/2 - range/performance problem",
+  "P1236": "Fuel pump (FP) relay, primary circuit - high",
+  "P1240": "Manifold absolute pressure (MAP) sensor 2 - signal too low at idle",
+  "P1242": "Manifold absolute pressure (MAP) sensor 2 - too high in deceleration",
+  "P1241": "Manifold absolute pressure (MAP) sensor 2 - signal too low at full load for low engine speed",
+  "P1106": "Manifold absolute pressure (MAP) sensor - signal too low at engine stop",
+  "P1108": "Manifold absolute pressure (MAP) sensor - signal too low at full load for low engine speed",
+  "P1125": "Throttle position (TP) sensor, A/B - small range/performance problem",
+  "P1143": "Heated oxygen sensor (H02S) 2, bank 1 - signal too high",
+  "P1144": "Heated oxygen sensor (H02S) 2, bank 1 - signal too low",
+  "P1572": "Engine control module (ECM), sensor supply circuit A - noisy signal"
+}

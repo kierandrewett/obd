@@ -1,0 +1,22 @@
+{
+  "P1372": "Segment Time Incorrect",
+  "P1100": "Manifold Absolute Pressure Sensor Range/Performance",
+  "P1102": "Manifold Absolute Pressure Sensor Circuit Low Input",
+  "P1103": "Manifold Absolute Pressure Sensor Circuit High Input",
+  "P1127": "Long Term Fuel Trim Multiplier Too Rich",
+  "P1134": "HO2S Bank 1 Sensor 1 Transition Time Switch (Bank 1 Sensor I)",
+  "P1128": "Long Term Fuel Trim Multiplier Too Lean",
+  "P1151": "ETS Main Accel Position Sensor 2 Malfunction",
+  "P1155": "ETS Limp Home Valve",
+  "P1169": "HO2S Bank 1 Sensor 1 Heater Power incorrect (Bank 2 Sensor 2)",
+  "P1167": "HO2S Bank 1 Sensor 1 Controller Adaptive Diagnosis Fault (Bank 2)",
+  "P1173": "Electronic Throttle System Rationality Malfunction",
+  "P1174": "Electronic Throttle System #1 Close Malfunction",
+  "P1124": "Long Term Fuel Trim Adaptive Too Rich",
+  "P1513": "Idle Air Control Valve Opening Coil Circuit Open (Coil 1)",
+  "P1511": "Idle Control Valve Command Signal Shorted (Coil 2)",
+  "P1529": "Customer Snapshot Request VIA CAN",
+  "P1552": "Idle Air Control Valve Closing Coil Circuit Shorted",
+  "P1586": "Encoding Signal Circuit Not Rationale",
+  "P1715": "Automatic Transmission Pulse Generator A Circuit"
+}

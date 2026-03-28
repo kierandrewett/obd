@@ -352,9 +352,11 @@ fn enrich_dtcs(dtcs: Vec<obd::Dtc>, make: Option<&str>, db: &DtcDatabase) -> Vec
                 }
             }
             let desc = dtc_descriptions::describe(&dtc.code);
-            if !desc.is_empty() {
-                dtc.description = desc.to_string();
-            }
+            dtc.description = if desc.is_empty() {
+                "No DTC description found".to_string()
+            } else {
+                desc.to_string()
+            };
             dtc
         })
         .collect()

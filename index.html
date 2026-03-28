@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OBD-II Dashboard</title>
+    <!-- Tell trunk to build the lib target (cdylib), not the desktop binary -->
+    <link data-trunk rel="rust" data-target-name="obd_dashboard" />
+    <style>
+        html, body {
+            overflow: hidden;
+            margin: 0 !important;
+            padding: 0 !important;
+            width: 100%;
+            height: 100%;
+            background: #1a1a1a;
+        }
+        canvas {
+            display: block;
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+    <script>
+    // Pre-size the canvas to physical pixels and pre-create the WebGL2 context
+    // with antialias:false so the browser doesn't downscale the framebuffer on
+    // HiDPI / Wayland displays.
+    //
+    // eframe calls canvas.getContext('webgl2') without attributes; because the
+    // canvas spec says a second call with a compatible type returns the *existing*
+    // context, our context (created first) is the one eframe gets.
+    (function () {
+        function initCanvas() {
+            var canvas = document.getElementById('canvas');
+            if (!canvas) return;
+
+            var dpr = window.devicePixelRatio || 1;
+            canvas.width  = Math.round(window.innerWidth  * dpr);
+            canvas.height = Math.round(window.innerHeight * dpr);
+
+            // Pre-create the WebGL2 context with antialias:false so the browser
+            // renders directly into the physical-pixel framebuffer without any
+            // implicit downscaling.
+            canvas.getContext('webgl2', {
+                antialias: false,
+                alpha: true,
+                depth: false,
+                stencil: false,
+                desynchronized: false,
+                powerPreference: 'high-performance',
+            }) || canvas.getContext('webgl', {
+                antialias: false,
+                alpha: true,
+                depth: false,
+                stencil: false,
+            });
+        }
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initCanvas);
+        } else {
+            initCanvas();
+        }
+    })();
+    </script>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+</body>
+</html>

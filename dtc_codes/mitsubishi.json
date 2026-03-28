@@ -1,0 +1,17 @@
+{
+  "P1300": "Ignition timing adjustment circuit fault",
+  "P1390": "Timing belt skipped one tooth or more",
+  "P1391": "Intermittent loss of CMP or CKP sensor signals",
+  "P1012": "V.V.T.CAM",
+  "P1294": "Target Idle speed not reached",
+  "P1296": "No 5 - volt supply to MAP sensor",
+  "P1297": "No charge in MAP from start to run",
+  "P1100": "Induction control motor position sensor fault",
+  "P1102": "Traction control ventilation solenoid circuit fault",
+  "P1103": "Turbocharger waste gate actuator circuit fault",
+  "P1104": "Turbocharger waster Gate solenoid circuit fault",
+  "P1105": "Fuel pressure solenoid circuit fault",
+  "P1101": "Traction control vacuum solenoid circuit fault",
+  "P1791": "PCM ECT level signal to TCM circuit fault",
+  "P1715": "TCM pulse generator circuit fault"
+}

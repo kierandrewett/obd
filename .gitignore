@@ -17,9 +17,8 @@ rust-obd/
 .DS_Store
 Thumbs.db
 
-# Old Node artifacts
-node_modules/
-package.json
-package-lock.json
-yarn.lock
-tsconfig.json
+# Script dependencies
+node_modules
+scripts/package-lock.json
+
+dist/
