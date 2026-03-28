@@ -49,8 +49,16 @@ pub fn start() {
         // canvas.width / canvas.height for the framebuffer size, so we must
         // set these *before* WebRunner::start().
         let ppp = window.device_pixel_ratio() as f32;
-        let css_w = window.inner_width().ok().and_then(|v| v.as_f64()).unwrap_or(800.0) as f32;
-        let css_h = window.inner_height().ok().and_then(|v| v.as_f64()).unwrap_or(600.0) as f32;
+        let css_w = window
+            .inner_width()
+            .ok()
+            .and_then(|v| v.as_f64())
+            .unwrap_or(800.0) as f32;
+        let css_h = window
+            .inner_height()
+            .ok()
+            .and_then(|v| v.as_f64())
+            .unwrap_or(600.0) as f32;
         canvas.set_width((css_w * ppp).round() as u32);
         canvas.set_height((css_h * ppp).round() as u32);
 

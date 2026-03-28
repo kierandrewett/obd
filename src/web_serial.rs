@@ -9,9 +9,9 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::mpsc;
+use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 
 // ── JS helpers ────────────────────────────────────────────────────────────────
@@ -31,8 +31,7 @@ fn js_call(obj: &JsValue, method: &str, args: &[JsValue]) -> Result<JsValue, Str
 }
 
 fn js_get(obj: &JsValue, key: &str) -> Result<JsValue, String> {
-    js_sys::Reflect::get(obj, &JsValue::from_str(key))
-        .map_err(|_| format!("no property `{key}`"))
+    js_sys::Reflect::get(obj, &JsValue::from_str(key)).map_err(|_| format!("no property `{key}`"))
 }
 
 fn js_set(obj: &JsValue, key: &str, val: &JsValue) -> Result<(), String> {
@@ -66,11 +65,9 @@ impl WebElm327 {
             .map_err(|_| "Web Serial API not available in this browser".to_string())?;
 
         if serial.is_undefined() || serial.is_null() {
-            return Err(
-                "Web Serial API is not supported in this browser. \
+            return Err("Web Serial API is not supported in this browser. \
                  Please use Chrome or Edge."
-                    .into(),
-            );
+                .into());
         }
 
         let options = js_sys::Object::new();
@@ -82,18 +79,22 @@ impl WebElm327 {
 
         let baud_rate = if baud == 0 { 38400 } else { baud };
         let open_opts = js_sys::Object::new();
-        js_set(&open_opts.clone().into(), "baudRate", &JsValue::from(baud_rate))?;
+        js_set(
+            &open_opts.clone().into(),
+            "baudRate",
+            &JsValue::from(baud_rate),
+        )?;
         js_await(js_call(&port, "open", &[open_opts.into()])?)
             .await
             .map_err(|e| format!("Could not open port at {baud_rate} baud: {e}"))?;
 
         let writable = js_get(&port, "writable")?;
-        let writer = js_call(&writable, "getWriter", &[])
-            .map_err(|e| format!("getWriter failed: {e}"))?;
+        let writer =
+            js_call(&writable, "getWriter", &[]).map_err(|e| format!("getWriter failed: {e}"))?;
 
         let readable = js_get(&port, "readable")?;
-        let reader = js_call(&readable, "getReader", &[])
-            .map_err(|e| format!("getReader failed: {e}"))?;
+        let reader =
+            js_call(&readable, "getReader", &[]).map_err(|e| format!("getReader failed: {e}"))?;
 
         let read_buffer: Rc<RefCell<VecDeque<u8>>> = Rc::new(RefCell::new(VecDeque::new()));
         let buf_clone = read_buffer.clone();
@@ -161,33 +162,44 @@ impl WebElm327 {
 
 impl ElmAdapter for WebElm327 {
     async fn send(&mut self, cmd: &str, timeout_ms: u64) -> Result<Vec<String>, Elm327Error> {
-        self.send_raw(cmd, timeout_ms).await.map_err(Elm327Error::Serial)
+        self.send_raw(cmd, timeout_ms)
+            .await
+            .map_err(Elm327Error::Serial)
     }
     async fn sleep_ms(&mut self, ms: u64) {
         gloo_timers::future::TimeoutFuture::new(ms as u32).await;
     }
-    fn info(&self) -> &ConnectionInfo { &self.info }
-    fn info_mut(&mut self) -> &mut ConnectionInfo { &mut self.info }
+    fn info(&self) -> &ConnectionInfo {
+        &self.info
+    }
+    fn info_mut(&mut self) -> &mut ConnectionInfo {
+        &mut self.info
+    }
 }
 
 async fn serial_read_loop(reader: JsValue, buffer: Rc<RefCell<VecDeque<u8>>>) {
     loop {
-        let result = match JsFuture::from(js_sys::Promise::from(
-            match js_call(&reader, "read", &[]) {
+        let result =
+            match JsFuture::from(js_sys::Promise::from(match js_call(&reader, "read", &[]) {
                 Ok(p) => p,
                 Err(_) => break,
-            },
-        ))
-        .await
+            }))
+            .await
+            {
+                Ok(v) => v,
+                Err(_) => break,
+            };
+        if js_get(&result, "done")
+            .ok()
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
         {
-            Ok(v) => v,
-            Err(_) => break,
-        };
-        if js_get(&result, "done").ok().and_then(|v| v.as_bool()).unwrap_or(false) {
             break;
         }
         if let Ok(value) = js_get(&result, "value") {
-            buffer.borrow_mut().extend(js_sys::Uint8Array::from(value).to_vec());
+            buffer
+                .borrow_mut()
+                .extend(js_sys::Uint8Array::from(value).to_vec());
         }
     }
 }
@@ -214,8 +226,7 @@ impl WsElm327 {
     async fn connect(ws_url: &str, event_tx: &mpsc::Sender<ObdEvent>) -> Result<Self, String> {
         let _ = event_tx.send(ObdEvent::Connecting(format!("Connecting to {ws_url}…")));
 
-        let ws = web_sys::WebSocket::new(ws_url)
-            .map_err(|e| format!("WebSocket error: {e:?}"))?;
+        let ws = web_sys::WebSocket::new(ws_url).map_err(|e| format!("WebSocket error: {e:?}"))?;
 
         let responses: Rc<RefCell<VecDeque<String>>> = Rc::new(RefCell::new(VecDeque::new()));
         let responses_clone = responses.clone();
@@ -235,7 +246,9 @@ impl WsElm327 {
                 1 => break, // OPEN
                 2 | 3 => {
                     // CLOSING / CLOSED
-                    return Err(format!("Could not connect to {ws_url} — is obd-emulator running?"));
+                    return Err(format!(
+                        "Could not connect to {ws_url} — is obd-emulator running?"
+                    ));
                 }
                 _ => {} // CONNECTING (0)
             }
@@ -301,13 +314,19 @@ impl WsElm327 {
 
 impl ElmAdapter for WsElm327 {
     async fn send(&mut self, cmd: &str, timeout_ms: u64) -> Result<Vec<String>, Elm327Error> {
-        self.send_raw(cmd, timeout_ms).await.map_err(Elm327Error::Serial)
+        self.send_raw(cmd, timeout_ms)
+            .await
+            .map_err(Elm327Error::Serial)
     }
     async fn sleep_ms(&mut self, ms: u64) {
         gloo_timers::future::TimeoutFuture::new(ms as u32).await;
     }
-    fn info(&self) -> &ConnectionInfo { &self.info }
-    fn info_mut(&mut self) -> &mut ConnectionInfo { &mut self.info }
+    fn info(&self) -> &ConnectionInfo {
+        &self.info
+    }
+    fn info_mut(&mut self) -> &mut ConnectionInfo {
+        &mut self.info
+    }
 }
 
 // ── Unified connection type ───────────────────────────────────────────────────
@@ -420,11 +439,11 @@ pub async fn run_worker(cmd_rx: mpsc::Receiver<OdbCmd>, event_tx: mpsc::Sender<O
                         }
                         if let Some(ref mut e) = elm {
                             let (stored, pending) = obd_ops::read_dtcs(e, &event_tx).await;
-                            let tx2   = event_tx.clone();
+                            let tx2 = event_tx.clone();
                             let make2 = current_make.clone();
                             wasm_bindgen_futures::spawn_local(async move {
                                 let _ = tx2.send(crate::app::ObdEvent::DtcDescriptionsReady {
-                                    stored:  obd_ops::enrich_with_db(stored,  make2.as_deref()),
+                                    stored: obd_ops::enrich_with_db(stored, make2.as_deref()),
                                     pending: obd_ops::enrich_with_db(pending, make2.as_deref()),
                                 });
                             });
@@ -433,11 +452,11 @@ pub async fn run_worker(cmd_rx: mpsc::Receiver<OdbCmd>, event_tx: mpsc::Sender<O
                     OdbCmd::ClearDtcs => {
                         if let Some(ref mut e) = elm {
                             let (stored, pending) = obd_ops::clear_dtcs(e, &event_tx).await;
-                            let tx2   = event_tx.clone();
+                            let tx2 = event_tx.clone();
                             let make2 = current_make.clone();
                             wasm_bindgen_futures::spawn_local(async move {
                                 let _ = tx2.send(crate::app::ObdEvent::DtcDescriptionsReady {
-                                    stored:  obd_ops::enrich_with_db(stored,  make2.as_deref()),
+                                    stored: obd_ops::enrich_with_db(stored, make2.as_deref()),
                                     pending: obd_ops::enrich_with_db(pending, make2.as_deref()),
                                 });
                             });
@@ -482,4 +501,3 @@ pub async fn run_worker(cmd_rx: mpsc::Receiver<OdbCmd>, event_tx: mpsc::Sender<O
         gloo_timers::future::TimeoutFuture::new(10).await;
     }
 }
-

@@ -5,9 +5,9 @@ use egui::{self, Color32, RichText};
 use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
 use std::io::Write;
+use std::sync::mpsc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Arc, Mutex};
-use std::sync::mpsc;
 
 // ── Cross-platform clipboard ──────────────────────────────────────────────────
 
@@ -61,11 +61,15 @@ pub enum OdbCmd {
         baud: Option<u32>,
     },
     /// Connect to a local OBD emulator via WebSocket (web only).
-    ConnectLocal { ws_port: u16 },
+    ConnectLocal {
+        ws_port: u16,
+    },
     Disconnect,
     StartLiveData,
     StopLiveData,
-    ReadDtcs { make: Option<String> },
+    ReadDtcs {
+        make: Option<String>,
+    },
     ClearDtcs,
     ReadFreezeFrame,
     ReadVin,
@@ -226,8 +230,7 @@ impl ObdApp {
         _cc: &eframe::CreationContext<'_>,
         cmd_tx: mpsc::Sender<OdbCmd>,
         event_rx: mpsc::Receiver<ObdEvent>,
-        #[cfg(not(target_arch = "wasm32"))]
-        log_file: Option<Arc<Mutex<std::fs::File>>>,
+        #[cfg(not(target_arch = "wasm32"))] log_file: Option<Arc<Mutex<std::fs::File>>>,
     ) -> Self {
         #[cfg(not(target_arch = "wasm32"))]
         let available_ports = crate::elm327::scan_ports();
@@ -628,111 +631,113 @@ impl ObdApp {
     fn acquire_wake_lock(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
         {
-        if self.wake_lock.is_some() {
-            return;
-        }
+            if self.wake_lock.is_some() {
+                return;
+            }
 
-        #[cfg(target_os = "windows")]
-        {
-            // ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
-            const ES_CONTINUOUS: u32 = 0x80000000;
-            const ES_SYSTEM_REQUIRED: u32 = 0x00000001;
-            const ES_DISPLAY_REQUIRED: u32 = 0x00000002;
-            #[link(name = "kernel32")]
-            unsafe extern "system" {
-                fn SetThreadExecutionState(flags: u32) -> u32;
-            }
-            unsafe {
-                SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
-            }
-            // Use a dummy child sentinel so release_wake_lock knows to clear it.
-            // On Windows we don't have a child process, so we use a no-op `cmd /c exit`.
-            if let Ok(child) = std::process::Command::new("cmd")
-                .args(["/c", "exit"])
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
+            #[cfg(target_os = "windows")]
             {
-                self.wake_lock = Some(child);
-            }
-            self.add_log("[WAKE_LOCK] Screen sleep inhibited");
-            return;
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            // caffeinate -i: prevent idle sleep; lives until killed
-            match std::process::Command::new("caffeinate")
-                .arg("-i")
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-            {
-                Ok(child) => {
+                // ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
+                const ES_CONTINUOUS: u32 = 0x80000000;
+                const ES_SYSTEM_REQUIRED: u32 = 0x00000001;
+                const ES_DISPLAY_REQUIRED: u32 = 0x00000002;
+                #[link(name = "kernel32")]
+                unsafe extern "system" {
+                    fn SetThreadExecutionState(flags: u32) -> u32;
+                }
+                unsafe {
+                    SetThreadExecutionState(
+                        ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED,
+                    );
+                }
+                // Use a dummy child sentinel so release_wake_lock knows to clear it.
+                // On Windows we don't have a child process, so we use a no-op `cmd /c exit`.
+                if let Ok(child) = std::process::Command::new("cmd")
+                    .args(["/c", "exit"])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                {
                     self.wake_lock = Some(child);
-                    self.add_log("[WAKE_LOCK] Screen sleep inhibited");
-                    return;
                 }
-                Err(e) => {
-                    self.add_log(&format!("[WAKE_LOCK] caffeinate unavailable: {e}"));
-                    return;
-                }
+                self.add_log("[WAKE_LOCK] Screen sleep inhibited");
+                return;
             }
-        }
 
-        #[cfg(target_os = "linux")]
-        {
-            // systemd-inhibit keeps the inhibit as long as the child process lives.
-            match std::process::Command::new("systemd-inhibit")
-                .args([
-                    "--what=idle",
-                    "--who=OBD Dashboard",
-                    "--why=Live OBD polling active",
-                    "--mode=block",
-                    "sleep",
-                    "infinity",
-                ])
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
+            #[cfg(target_os = "macos")]
             {
-                Ok(child) => {
-                    self.wake_lock = Some(child);
-                    self.add_log("[WAKE_LOCK] Screen sleep inhibited");
-                }
-                Err(e) => {
-                    self.add_log(&format!("[WAKE_LOCK] systemd-inhibit unavailable: {e}"));
+                // caffeinate -i: prevent idle sleep; lives until killed
+                match std::process::Command::new("caffeinate")
+                    .arg("-i")
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                {
+                    Ok(child) => {
+                        self.wake_lock = Some(child);
+                        self.add_log("[WAKE_LOCK] Screen sleep inhibited");
+                        return;
+                    }
+                    Err(e) => {
+                        self.add_log(&format!("[WAKE_LOCK] caffeinate unavailable: {e}"));
+                        return;
+                    }
                 }
             }
-        }
+
+            #[cfg(target_os = "linux")]
+            {
+                // systemd-inhibit keeps the inhibit as long as the child process lives.
+                match std::process::Command::new("systemd-inhibit")
+                    .args([
+                        "--what=idle",
+                        "--who=OBD Dashboard",
+                        "--why=Live OBD polling active",
+                        "--mode=block",
+                        "sleep",
+                        "infinity",
+                    ])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                {
+                    Ok(child) => {
+                        self.wake_lock = Some(child);
+                        self.add_log("[WAKE_LOCK] Screen sleep inhibited");
+                    }
+                    Err(e) => {
+                        self.add_log(&format!("[WAKE_LOCK] systemd-inhibit unavailable: {e}"));
+                    }
+                }
+            }
         } // end #[cfg(not(target_arch = "wasm32"))]
     }
 
     fn release_wake_lock(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
         {
-        #[cfg(target_os = "windows")]
-        {
-            if self.wake_lock.is_some() {
-                const ES_CONTINUOUS: u32 = 0x80000000;
-                #[link(name = "kernel32")]
-                unsafe extern "system" {
-                    fn SetThreadExecutionState(flags: u32) -> u32;
-                }
-                unsafe {
-                    SetThreadExecutionState(ES_CONTINUOUS);
+            #[cfg(target_os = "windows")]
+            {
+                if self.wake_lock.is_some() {
+                    const ES_CONTINUOUS: u32 = 0x80000000;
+                    #[link(name = "kernel32")]
+                    unsafe extern "system" {
+                        fn SetThreadExecutionState(flags: u32) -> u32;
+                    }
+                    unsafe {
+                        SetThreadExecutionState(ES_CONTINUOUS);
+                    }
                 }
             }
-        }
 
-        if let Some(mut child) = self.wake_lock.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-            self.add_log("[WAKE_LOCK] Screen sleep re-enabled");
-        }
+            if let Some(mut child) = self.wake_lock.take() {
+                let _ = child.kill();
+                let _ = child.wait();
+                self.add_log("[WAKE_LOCK] Screen sleep re-enabled");
+            }
         } // end #[cfg(not(target_arch = "wasm32"))]
     }
 
@@ -1203,7 +1208,9 @@ impl ObdApp {
 
         ui.horizontal(|ui| {
             if ui.button("Read DTCs").clicked() {
-                self.send_cmd(OdbCmd::ReadDtcs { make: self.vehicle_make() });
+                self.send_cmd(OdbCmd::ReadDtcs {
+                    make: self.vehicle_make(),
+                });
             }
             if ui
                 .button(RichText::new("Clear DTCs").color(Color32::from_rgb(220, 50, 50)))
@@ -1411,7 +1418,9 @@ impl ObdApp {
                 self.send_cmd(OdbCmd::QuerySupportedPids);
             }
             if ui.button("Read DTCs").clicked() {
-                self.send_cmd(OdbCmd::ReadDtcs { make: self.vehicle_make() });
+                self.send_cmd(OdbCmd::ReadDtcs {
+                    make: self.vehicle_make(),
+                });
             }
         });
 

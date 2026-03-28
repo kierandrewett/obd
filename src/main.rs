@@ -61,14 +61,21 @@ fn main() {
         Some(path) => {
             let db = DtcDatabase::load(&path);
             if db.is_loaded() {
-                info!(path, makes = db.make_count(), codes = db.code_count(), "Loaded DTC database");
+                info!(
+                    path,
+                    makes = db.make_count(),
+                    codes = db.code_count(),
+                    "Loaded DTC database"
+                );
             } else {
                 info!(path, "dtc_codes.json found but empty or unreadable");
             }
             db
         }
         None => {
-            info!("No dtc_codes.json found — run scripts/fetch_dtc_codes.py to enable manufacturer-specific descriptions");
+            info!(
+                "No dtc_codes.json found — run scripts/fetch_dtc_codes.py to enable manufacturer-specific descriptions"
+            );
             DtcDatabase::default()
         }
     });
@@ -126,7 +133,11 @@ enum AnyElm {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl elm327::ElmAdapter for AnyElm {
-    async fn send(&mut self, cmd: &str, timeout_ms: u64) -> Result<Vec<String>, elm327::Elm327Error> {
+    async fn send(
+        &mut self,
+        cmd: &str,
+        timeout_ms: u64,
+    ) -> Result<Vec<String>, elm327::Elm327Error> {
         match self {
             Self::Serial(e) => e.send(cmd, timeout_ms).await,
             #[cfg(debug_assertions)]
@@ -153,7 +164,11 @@ impl elm327::ElmAdapter for AnyElm {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn obd_worker(cmd_rx: mpsc::Receiver<OdbCmd>, event_tx: mpsc::Sender<ObdEvent>, dtc_db: Arc<DtcDatabase>) {
+fn obd_worker(
+    cmd_rx: mpsc::Receiver<OdbCmd>,
+    event_tx: mpsc::Sender<ObdEvent>,
+    dtc_db: Arc<DtcDatabase>,
+) {
     use app::PollConfig;
 
     let mut elm: Option<AnyElm> = None;
@@ -234,12 +249,12 @@ fn obd_worker(cmd_rx: mpsc::Receiver<OdbCmd>, event_tx: mpsc::Sender<ObdEvent>, 
                     }
                     if let Some(ref mut e) = elm {
                         let (stored, pending) = elm327::block_on(obd_ops::read_dtcs(e, &event_tx));
-                        let tx2    = event_tx.clone();
-                        let make2  = current_make.clone();
-                        let db2    = dtc_db.clone();
+                        let tx2 = event_tx.clone();
+                        let make2 = current_make.clone();
+                        let db2 = dtc_db.clone();
                         thread::spawn(move || {
                             let _ = tx2.send(ObdEvent::DtcDescriptionsReady {
-                                stored:  enrich_dtcs(stored,  make2.as_deref(), &db2),
+                                stored: enrich_dtcs(stored, make2.as_deref(), &db2),
                                 pending: enrich_dtcs(pending, make2.as_deref(), &db2),
                             });
                         });
@@ -250,12 +265,12 @@ fn obd_worker(cmd_rx: mpsc::Receiver<OdbCmd>, event_tx: mpsc::Sender<ObdEvent>, 
                     if let Some(ref mut e) = elm {
                         info!("[DTC_CLEAR] Clearing DTCs");
                         let (stored, pending) = elm327::block_on(obd_ops::clear_dtcs(e, &event_tx));
-                        let tx2    = event_tx.clone();
-                        let make2  = current_make.clone();
-                        let db2    = dtc_db.clone();
+                        let tx2 = event_tx.clone();
+                        let make2 = current_make.clone();
+                        let db2 = dtc_db.clone();
                         thread::spawn(move || {
                             let _ = tx2.send(ObdEvent::DtcDescriptionsReady {
-                                stored:  enrich_dtcs(stored,  make2.as_deref(), &db2),
+                                stored: enrich_dtcs(stored, make2.as_deref(), &db2),
                                 pending: enrich_dtcs(pending, make2.as_deref(), &db2),
                             });
                         });
@@ -289,9 +304,8 @@ fn obd_worker(cmd_rx: mpsc::Receiver<OdbCmd>, event_tx: mpsc::Sender<ObdEvent>, 
                     #[cfg(debug_assertions)]
                     {
                         let addr = format!("127.0.0.1:{ws_port}");
-                        let _ = event_tx.send(ObdEvent::Connecting(
-                            format!("Connecting to ws://{addr}…"),
-                        ));
+                        let _ = event_tx
+                            .send(ObdEvent::Connecting(format!("Connecting to ws://{addr}…")));
                         match elm327::WsElm327::connect(&addr) {
                             Ok(mut ws_elm) => {
                                 let init_tx = event_tx.clone();
@@ -316,8 +330,7 @@ fn obd_worker(cmd_rx: mpsc::Receiver<OdbCmd>, event_tx: mpsc::Sender<ObdEvent>, 
                                 }
                             }
                             Err(e) => {
-                                let _ =
-                                    event_tx.send(ObdEvent::ConnectionFailed(e.to_string()));
+                                let _ = event_tx.send(ObdEvent::ConnectionFailed(e.to_string()));
                             }
                         }
                     }
@@ -335,7 +348,12 @@ fn obd_worker(cmd_rx: mpsc::Receiver<OdbCmd>, event_tx: mpsc::Sender<ObdEvent>, 
         // Live data polling
         if live_running {
             if let Some(ref mut e) = elm {
-                elm327::block_on(obd_ops::poll_live_data(e, &event_tx, &pid_defs, &poll_config));
+                elm327::block_on(obd_ops::poll_live_data(
+                    e,
+                    &event_tx,
+                    &pid_defs,
+                    &poll_config,
+                ));
 
                 // Also poll voltage periodically (every poll cycle includes it)
                 if let Ok(v) = elm327::block_on(e.read_voltage()) {
@@ -359,7 +377,7 @@ fn enrich_dtcs(dtcs: Vec<obd::Dtc>, make: Option<&str>, db: &DtcDatabase) -> Vec
                 if let Some((desc, alias_src)) = db.lookup_with_source(m, &dtc.code) {
                     dtc.description = desc.to_string();
                     dtc.desc_source = match alias_src {
-                        None    => obd::DescSource::Own,
+                        None => obd::DescSource::Own,
                         Some(a) => obd::DescSource::Family(title_case(a)),
                     };
                     return dtc;
@@ -386,4 +404,3 @@ fn title_case(s: &str) -> String {
     }
     t
 }
-

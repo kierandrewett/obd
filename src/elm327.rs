@@ -80,7 +80,11 @@ pub trait ElmAdapter {
     async fn sleep_ms(&mut self, _ms: u64) {}
 
     /// Like `send` but logs the raw exchange at INFO level.
-    async fn send_logged(&mut self, cmd: &str, timeout_ms: u64) -> Result<Vec<String>, Elm327Error> {
+    async fn send_logged(
+        &mut self,
+        cmd: &str,
+        timeout_ms: u64,
+    ) -> Result<Vec<String>, Elm327Error> {
         let lines = self.send(cmd, timeout_ms).await?;
         tracing::info!(
             cmd,
@@ -93,7 +97,10 @@ pub trait ElmAdapter {
 
     async fn read_voltage(&mut self) -> Result<String, Elm327Error> {
         let lines = self.send("ATRV", 2000).await?;
-        Ok(lines.into_iter().next().unwrap_or_else(|| "N/A".to_string()))
+        Ok(lines
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| "N/A".to_string()))
     }
 }
 
@@ -108,7 +115,9 @@ pub trait ElmAdapter {
 pub fn block_on<F: std::future::Future>(f: F) -> F::Output {
     use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
     fn noop(_: *const ()) {}
-    fn noop_clone(_: *const ()) -> RawWaker { make_noop_waker() }
+    fn noop_clone(_: *const ()) -> RawWaker {
+        make_noop_waker()
+    }
     fn make_noop_waker() -> RawWaker {
         static VTABLE: RawWakerVTable = RawWakerVTable::new(noop_clone, noop, noop, noop);
         RawWaker::new(std::ptr::null(), &VTABLE)
@@ -479,7 +488,8 @@ impl ElmAdapter for WsElm327 {
         self.ws
             .send(Message::Text(cmd.to_string().into()))
             .map_err(|e| Elm327Error::Serial(format!("WS send: {e}")))?;
-        let msg = self.ws
+        let msg = self
+            .ws
             .read()
             .map_err(|e| Elm327Error::Timeout(format!("WS read: {e}")))?;
         let text = match msg {
@@ -506,4 +516,3 @@ impl ElmAdapter for WsElm327 {
         &mut self.info
     }
 }
-

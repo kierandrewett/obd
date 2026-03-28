@@ -5,7 +5,7 @@
 //! - WASM calls them with `.await`
 
 use crate::app::{ObdEvent, PollConfig, PollMode};
-use crate::elm327::{decode_protocol, Elm327Error, ElmAdapter};
+use crate::elm327::{Elm327Error, ElmAdapter, decode_protocol};
 use crate::obd;
 use std::sync::mpsc;
 
@@ -79,7 +79,10 @@ pub async fn read_dtcs<A: ElmAdapter>(
         Ok(lines) => obd::parse_dtc_response_lines(&lines, "47"),
         Err(_) => Vec::new(),
     };
-    let _ = event_tx.send(ObdEvent::DtcResult { stored: stored.clone(), pending: pending.clone() });
+    let _ = event_tx.send(ObdEvent::DtcResult {
+        stored: stored.clone(),
+        pending: pending.clone(),
+    });
     (stored, pending)
 }
 
@@ -126,8 +129,8 @@ pub async fn poll_live_data<A: ElmAdapter>(
         PollMode::Minimal => &["010C", "010D", "0111", "0104"],
         PollMode::Fast => &["010C", "010D", "0111", "0104", "0105", "010F", "0110"],
         PollMode::Full => &[
-            "010C", "010D", "0105", "0104", "0111", "010F", "0110", "012F", "0106", "0107",
-            "010B", "010E", "015C", "0142", "0146", "012C", "012E", "0133", "0149", "0144",
+            "010C", "010D", "0105", "0104", "0111", "010F", "0110", "012F", "0106", "0107", "010B",
+            "010E", "015C", "0142", "0146", "012C", "012E", "0133", "0149", "0144",
         ],
     };
 
@@ -201,10 +204,7 @@ pub async fn read_freeze_frame<A: ElmAdapter>(
 }
 
 /// Query supported PIDs across the four standard Mode 01 ranges.
-pub async fn query_supported_pids<A: ElmAdapter>(
-    elm: &mut A,
-    event_tx: &mpsc::Sender<ObdEvent>,
-) {
+pub async fn query_supported_pids<A: ElmAdapter>(elm: &mut A, event_tx: &mpsc::Sender<ObdEvent>) {
     let mut all_supported = Vec::new();
     for range in &["0100", "0120", "0140", "0160"] {
         match elm.send(range, 2000).await {

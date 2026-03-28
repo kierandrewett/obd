@@ -27,7 +27,7 @@ mod emulator {
         // Engine
         pub engine_on: bool,
         pub rpm: f32,
-        pub throttle: f32,   // 0-100 %
+        pub throttle: f32,    // 0-100 %
         pub engine_load: f32, // 0-100 %
 
         // Motion
@@ -40,17 +40,17 @@ mod emulator {
         pub ambient_temp: f32,
 
         // Fuel & air
-        pub maf: f32,              // g/s
-        pub fuel_level: f32,       // 0-100 %
-        pub short_fuel_trim: f32,  // -25..+25 %
+        pub maf: f32,             // g/s
+        pub fuel_level: f32,      // 0-100 %
+        pub short_fuel_trim: f32, // -25..+25 %
         pub long_fuel_trim: f32,
-        pub intake_pressure: f32,  // kPa
-        pub baro_pressure: f32,    // kPa
-        pub timing_advance: f32,   // degrees
+        pub intake_pressure: f32, // kPa
+        pub baro_pressure: f32,   // kPa
+        pub timing_advance: f32,  // degrees
 
         // Electrical
-        pub voltage: f32,       // V
-        pub base_voltage: f32,  // Slider baseline
+        pub voltage: f32,      // V
+        pub base_voltage: f32, // Slider baseline
 
         // Runtime (seconds since engine start)
         pub runtime_secs: u32,
@@ -71,10 +71,10 @@ mod emulator {
         pub max_speed: f32,
 
         // Transmission
-        pub gear: u8,   // 1–6
+        pub gear: u8, // 1–6
 
         // Physics internals
-        warmup: f32,                   // 0-1 warmup progress
+        warmup: f32, // 0-1 warmup progress
         last_update: Option<Instant>,
         engine_start_time: Option<Instant>,
 
@@ -164,7 +164,11 @@ mod emulator {
 
                 let in_gear = self.gear > 0;
                 let g = self.gear.saturating_sub(1).min(5) as usize;
-                let wheel_rpm = if in_gear { self.speed * GEAR_FACTORS[g] } else { 0.0 };
+                let wheel_rpm = if in_gear {
+                    self.speed * GEAR_FACTORS[g]
+                } else {
+                    0.0
+                };
 
                 // RPM: engine braking (off-throttle in gear) vs throttle-driven
                 if in_gear && self.throttle < 5.0 && self.speed > 4.0 {
@@ -175,8 +179,16 @@ mod emulator {
                     // Throttle drives RPM; in gear also can't drop below wheel demand
                     let throttle_rpm = self.idle_rpm
                         + (self.max_rpm - self.idle_rpm) * (self.throttle / 100.0).powf(0.65);
-                    let rpm_target = if in_gear { throttle_rpm.max(wheel_rpm) } else { throttle_rpm };
-                    let rpm_rate = if rpm_target > self.rpm { 3500.0 } else { 2000.0 };
+                    let rpm_target = if in_gear {
+                        throttle_rpm.max(wheel_rpm)
+                    } else {
+                        throttle_rpm
+                    };
+                    let rpm_rate = if rpm_target > self.rpm {
+                        3500.0
+                    } else {
+                        2000.0
+                    };
                     let delta = (rpm_target - self.rpm).abs().min(rpm_rate * dt);
                     self.rpm += (rpm_target - self.rpm).signum() * delta;
                     self.rpm = self.rpm.clamp(self.idle_rpm * 0.95, self.max_rpm);
@@ -224,20 +236,17 @@ mod emulator {
                 self.maf = self.engine_load / 100.0 * 28.0 + 1.2;
                 self.intake_pressure =
                     (self.baro_pressure - self.engine_load / 100.0 * 45.0).clamp(20.0, 110.0);
-                self.timing_advance =
-                    (18.0 - self.engine_load / 100.0 * 10.0).clamp(2.0, 25.0);
+                self.timing_advance = (18.0 - self.engine_load / 100.0 * 10.0).clamp(2.0, 25.0);
 
                 // Warmup of coolant / oil
                 let target_coolant = self.ambient_temp + self.warmup * (92.0 - self.ambient_temp);
-                self.coolant_temp +=
-                    (target_coolant - self.coolant_temp) * (dt * 0.4).min(1.0);
+                self.coolant_temp += (target_coolant - self.coolant_temp) * (dt * 0.4).min(1.0);
 
                 let target_oil = self.ambient_temp + self.warmup * (96.0 - self.ambient_temp);
                 self.oil_temp += (target_oil - self.oil_temp) * (dt * 0.25).min(1.0);
 
                 // Voltage: alternator boosts above 12V, sags under heavy load
-                let alt_voltage =
-                    self.base_voltage - (self.engine_load / 100.0) * 1.2;
+                let alt_voltage = self.base_voltage - (self.engine_load / 100.0) * 1.2;
                 self.voltage += (alt_voltage - self.voltage) * (dt * 2.0).min(1.0);
             } else {
                 // Engine off: coast / cool down
@@ -253,10 +262,8 @@ mod emulator {
                     (self.speed - 4.0 * dt).max(0.0)
                 };
 
-                self.coolant_temp +=
-                    (self.ambient_temp - self.coolant_temp) * (dt * 0.04).min(1.0);
-                self.oil_temp +=
-                    (self.ambient_temp - self.oil_temp) * (dt * 0.03).min(1.0);
+                self.coolant_temp += (self.ambient_temp - self.coolant_temp) * (dt * 0.04).min(1.0);
+                self.oil_temp += (self.ambient_temp - self.oil_temp) * (dt * 0.03).min(1.0);
                 self.voltage += (12.3 - self.voltage) * (dt * 0.8).min(1.0);
             }
 
@@ -266,8 +273,7 @@ mod emulator {
             } else {
                 0.0
             };
-            self.intake_temp +=
-                (self.ambient_temp + heat - self.intake_temp) * (dt * 0.3).min(1.0);
+            self.intake_temp += (self.ambient_temp + heat - self.intake_temp) * (dt * 0.3).min(1.0);
         }
 
         /// Build the ELM327 response string for an incoming command (no prompt, no \r).
@@ -295,8 +301,7 @@ mod emulator {
 
                 // ── VIN (Mode 09 PID 02) ──────────────────────────────────────
                 "0902" => {
-                    let hex: String =
-                        self.vin.bytes().map(|b| format!("{b:02X}")).collect();
+                    let hex: String = self.vin.bytes().map(|b| format!("{b:02X}")).collect();
                     return format!("490201{hex}");
                 }
 
@@ -306,31 +311,15 @@ mod emulator {
                     return format!("410C{v:04X}");
                 }
                 "010D" => return format!("410D{:02X}", self.speed as u32),
-                "0104" => {
-                    return format!(
-                        "4104{:02X}",
-                        (self.engine_load / 100.0 * 255.0) as u32
-                    )
-                }
-                "0105" => {
-                    return format!("4105{:02X}", (self.coolant_temp as i32 + 40) as u32)
-                }
-                "0111" => {
-                    return format!(
-                        "4111{:02X}",
-                        (self.throttle / 100.0 * 255.0) as u32
-                    )
-                }
-                "010F" => {
-                    return format!("410F{:02X}", (self.intake_temp as i32 + 40) as u32)
-                }
+                "0104" => return format!("4104{:02X}", (self.engine_load / 100.0 * 255.0) as u32),
+                "0105" => return format!("4105{:02X}", (self.coolant_temp as i32 + 40) as u32),
+                "0111" => return format!("4111{:02X}", (self.throttle / 100.0 * 255.0) as u32),
+                "010F" => return format!("410F{:02X}", (self.intake_temp as i32 + 40) as u32),
                 "0110" => {
                     let v = (self.maf * 100.0) as u32;
                     return format!("4110{v:04X}");
                 }
-                "012F" => {
-                    return format!("412F{:02X}", (self.fuel_level / 100.0 * 255.0) as u32)
-                }
+                "012F" => return format!("412F{:02X}", (self.fuel_level / 100.0 * 255.0) as u32),
                 "0106" => {
                     let v = ((self.short_fuel_trim / 100.0 + 1.0) * 128.0) as u32;
                     return format!("4106{v:02X}");
@@ -344,20 +333,14 @@ mod emulator {
                     let v = ((self.timing_advance + 64.0) * 2.0) as u32;
                     return format!("410E{v:02X}");
                 }
-                "015C" => {
-                    return format!("415C{:02X}", (self.oil_temp as i32 + 40) as u32)
-                }
+                "015C" => return format!("415C{:02X}", (self.oil_temp as i32 + 40) as u32),
                 "0142" => {
                     let v = (self.voltage * 1000.0) as u32;
                     return format!("4142{v:04X}");
                 }
-                "0146" => {
-                    return format!("4146{:02X}", (self.ambient_temp as i32 + 40) as u32)
-                }
+                "0146" => return format!("4146{:02X}", (self.ambient_temp as i32 + 40) as u32),
                 "0133" => return format!("4133{:02X}", self.baro_pressure as u32),
-                "011F" => {
-                    return format!("411F{:04X}", self.runtime_secs.min(0xFFFF))
-                }
+                "011F" => return format!("411F{:04X}", self.runtime_secs.min(0xFFFF)),
 
                 // ── Mode 03 / 07: stored and pending DTCs ─────────────────────
                 "03" => {
@@ -444,10 +427,7 @@ mod emulator {
         unsafe {
             let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
             if master < 0 {
-                return Err(format!(
-                    "posix_openpt: {}",
-                    std::io::Error::last_os_error()
-                ));
+                return Err(format!("posix_openpt: {}", std::io::Error::last_os_error()));
             }
             if libc::grantpt(master) < 0 {
                 libc::close(master);
@@ -462,9 +442,7 @@ mod emulator {
                 libc::close(master);
                 return Err("ptsname failed".into());
             }
-            let slave_path = CStr::from_ptr(name_ptr)
-                .to_string_lossy()
-                .into_owned();
+            let slave_path = CStr::from_ptr(name_ptr).to_string_lossy().into_owned();
 
             // Set master side to raw mode so the terminal line discipline
             // doesn't mangle our protocol bytes.
@@ -488,9 +466,7 @@ mod emulator {
             let mut byte = [0u8; 1];
 
             loop {
-                let n = unsafe {
-                    libc::read(master_fd, byte.as_mut_ptr() as *mut libc::c_void, 1)
-                };
+                let n = unsafe { libc::read(master_fd, byte.as_mut_ptr() as *mut libc::c_void, 1) };
                 if n <= 0 {
                     // EOF / error — port was closed
                     if let Ok(mut st) = state.lock() {
@@ -589,7 +565,10 @@ mod emulator {
                             let mut st = state.lock().unwrap();
                             st.respond(text.trim())
                         };
-                        if ws.send(tungstenite::Message::Text(response.into())).is_err() {
+                        if ws
+                            .send(tungstenite::Message::Text(response.into()))
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -674,7 +653,11 @@ mod emulator {
                     } else {
                         ui.label("Port:");
                         ui.code(&self.slave_path);
-                        let copy_label = if self.copy_flash > 0 { "✓ Copied" } else { "Copy" };
+                        let copy_label = if self.copy_flash > 0 {
+                            "✓ Copied"
+                        } else {
+                            "Copy"
+                        };
                         if ui.small_button(copy_label).clicked() {
                             ctx.copy_text(self.slave_path.clone());
                             self.copy_flash = 60;
@@ -686,7 +669,11 @@ mod emulator {
                     let ws_url = format!("ws://localhost:{}", self.ws_port);
                     ui.label("WS:");
                     ui.code(&ws_url);
-                    let ws_copy_label = if self.ws_copy_flash > 0 { "✓ Copied" } else { "Copy" };
+                    let ws_copy_label = if self.ws_copy_flash > 0 {
+                        "✓ Copied"
+                    } else {
+                        "Copy"
+                    };
                     if ui.small_button(ws_copy_label).clicked() {
                         ctx.copy_text(ws_url);
                         self.ws_copy_flash = 60;
@@ -746,18 +733,14 @@ mod emulator {
                     ui.horizontal(|ui| {
                         let accel_btn = ui.add_sized(
                             [120.0, 56.0],
-                            egui::Button::new(
-                                RichText::new("⬆  Accelerate").strong().size(14.0),
-                            )
-                            .fill(Color32::from_rgb(30, 100, 200)),
+                            egui::Button::new(RichText::new("⬆  Accelerate").strong().size(14.0))
+                                .fill(Color32::from_rgb(30, 100, 200)),
                         );
                         ui.add_space(8.0);
                         let brake_btn = ui.add_sized(
                             [120.0, 56.0],
-                            egui::Button::new(
-                                RichText::new("⬇  Brake").strong().size(14.0),
-                            )
-                            .fill(Color32::from_rgb(180, 60, 30)),
+                            egui::Button::new(RichText::new("⬇  Brake").strong().size(14.0))
+                                .fill(Color32::from_rgb(180, 60, 30)),
                         );
 
                         let mut st = self.state.lock().unwrap();
@@ -775,40 +758,52 @@ mod emulator {
                         let mut st = self.state.lock().unwrap();
 
                         ui.label(RichText::new("Engine Settings").strong());
-                        ui.add(Slider::new(&mut st.idle_rpm, 600.0..=1200.0)
-                            .text("Idle RPM"));
-                        ui.add(Slider::new(&mut st.max_rpm, 4000.0..=8000.0)
-                            .text("Rev Limit"));
-                        ui.add(Slider::new(&mut st.max_speed, 80.0..=300.0)
-                            .suffix(" km/h")
-                            .text("Top Speed"));
+                        ui.add(Slider::new(&mut st.idle_rpm, 600.0..=1200.0).text("Idle RPM"));
+                        ui.add(Slider::new(&mut st.max_rpm, 4000.0..=8000.0).text("Rev Limit"));
+                        ui.add(
+                            Slider::new(&mut st.max_speed, 80.0..=300.0)
+                                .suffix(" km/h")
+                                .text("Top Speed"),
+                        );
 
                         ui.add_space(8.0);
                         ui.label(RichText::new("Electrical").strong());
-                        ui.add(Slider::new(&mut st.base_voltage, 11.0..=15.5)
-                            .suffix(" V")
-                            .text("Base Voltage"));
+                        ui.add(
+                            Slider::new(&mut st.base_voltage, 11.0..=15.5)
+                                .suffix(" V")
+                                .text("Base Voltage"),
+                        );
 
                         ui.add_space(8.0);
                         ui.label(RichText::new("Fuel & Environment").strong());
-                        ui.add(Slider::new(&mut st.fuel_level, 0.0..=100.0)
-                            .suffix(" %")
-                            .text("Fuel Level"));
-                        ui.add(Slider::new(&mut st.baro_pressure, 85.0..=110.0)
-                            .suffix(" kPa")
-                            .text("Baro Pressure"));
-                        ui.add(Slider::new(&mut st.ambient_temp, -20.0..=50.0)
-                            .suffix(" °C")
-                            .text("Ambient Temp"));
+                        ui.add(
+                            Slider::new(&mut st.fuel_level, 0.0..=100.0)
+                                .suffix(" %")
+                                .text("Fuel Level"),
+                        );
+                        ui.add(
+                            Slider::new(&mut st.baro_pressure, 85.0..=110.0)
+                                .suffix(" kPa")
+                                .text("Baro Pressure"),
+                        );
+                        ui.add(
+                            Slider::new(&mut st.ambient_temp, -20.0..=50.0)
+                                .suffix(" °C")
+                                .text("Ambient Temp"),
+                        );
 
                         ui.add_space(8.0);
                         ui.label(RichText::new("Fuel Trims").strong());
-                        ui.add(Slider::new(&mut st.short_fuel_trim, -25.0..=25.0)
-                            .suffix(" %")
-                            .text("Short Trim B1"));
-                        ui.add(Slider::new(&mut st.long_fuel_trim, -25.0..=25.0)
-                            .suffix(" %")
-                            .text("Long Trim B1"));
+                        ui.add(
+                            Slider::new(&mut st.short_fuel_trim, -25.0..=25.0)
+                                .suffix(" %")
+                                .text("Short Trim B1"),
+                        );
+                        ui.add(
+                            Slider::new(&mut st.long_fuel_trim, -25.0..=25.0)
+                                .suffix(" %")
+                                .text("Long Trim B1"),
+                        );
                     }
 
                     ui.add_space(12.0);
@@ -818,26 +813,26 @@ mod emulator {
                     // VIN editor
                     {
                         const VIN_PRESETS: &[(&str, &str)] = &[
-                            ("Honda Accord 2003",         "1HGCM82633A004352"),
-                            ("Ford Mustang GT 2018",      "1FA6P8CF5J5100001"),
-                            ("Ford F-150 2014",           "1FTFW1ET5EFC00001"),
-                            ("Ford Focus 2011 (EU)",      "WF0XXXGBBXBR00001"),
-                            ("Opel Astra H 2007",         "W0L0AHL3574000001"),
-                            ("Opel Corsa D 2010",         "W0L0XCE75A4000001"),
-                            ("VW Golf VI 2010",           "WVWZZZ1KZAM000001"),
-                            ("VW Passat B7 2013",         "WVWZZZ3CZDE000001"),
-                            ("Audi A4 B8 2012",           "WAUZZZ8K5CA000001"),
-                            ("BMW 3 Series 2014",         "WBA3A5C55EF000001"),
-                            ("Mercedes C-Class 2008",     "WDBRF52H08F000001"),
-                            ("Toyota Corolla 2005",       "JTDBR32E050000001"),
-                            ("Toyota Camry 2015",         "4T1BF1FK5FU000001"),
-                            ("Nissan Altima 2012",        "1N4AL3AP5CC000001"),
-                            ("Renault Megane III 2011",   "VF1BZ0J0H50000001"),
-                            ("Peugeot 308 2014",          "VF3LBHNZHES000001"),
-                            ("Hyundai i30 2013",          "KMHD35LE8DU000001"),
-                            ("Subaru Impreza 2011",       "JF1GR7E62BG000001"),
-                            ("Chevrolet Silverado 2018",  "1GCVKNEC6JZ000001"),
-                            ("Dodge Charger 2015",        "2C3CDXHG9FH000001"),
+                            ("Honda Accord 2003", "1HGCM82633A004352"),
+                            ("Ford Mustang GT 2018", "1FA6P8CF5J5100001"),
+                            ("Ford F-150 2014", "1FTFW1ET5EFC00001"),
+                            ("Ford Focus 2011 (EU)", "WF0XXXGBBXBR00001"),
+                            ("Opel Astra H 2007", "W0L0AHL3574000001"),
+                            ("Opel Corsa D 2010", "W0L0XCE75A4000001"),
+                            ("VW Golf VI 2010", "WVWZZZ1KZAM000001"),
+                            ("VW Passat B7 2013", "WVWZZZ3CZDE000001"),
+                            ("Audi A4 B8 2012", "WAUZZZ8K5CA000001"),
+                            ("BMW 3 Series 2014", "WBA3A5C55EF000001"),
+                            ("Mercedes C-Class 2008", "WDBRF52H08F000001"),
+                            ("Toyota Corolla 2005", "JTDBR32E050000001"),
+                            ("Toyota Camry 2015", "4T1BF1FK5FU000001"),
+                            ("Nissan Altima 2012", "1N4AL3AP5CC000001"),
+                            ("Renault Megane III 2011", "VF1BZ0J0H50000001"),
+                            ("Peugeot 308 2014", "VF3LBHNZHES000001"),
+                            ("Hyundai i30 2013", "KMHD35LE8DU000001"),
+                            ("Subaru Impreza 2011", "JF1GR7E62BG000001"),
+                            ("Chevrolet Silverado 2018", "1GCVKNEC6JZ000001"),
+                            ("Dodge Charger 2015", "2C3CDXHG9FH000001"),
                         ];
 
                         let mut st = self.state.lock().unwrap();
@@ -877,7 +872,11 @@ mod emulator {
                             ui.end_row();
 
                             ui.label("Gear");
-                            ui.monospace(if st.gear == 0 { "N".to_string() } else { st.gear.to_string() });
+                            ui.monospace(if st.gear == 0 {
+                                "N".to_string()
+                            } else {
+                                st.gear.to_string()
+                            });
                             ui.end_row();
 
                             ui.label("Speed");
@@ -989,9 +988,7 @@ mod emulator {
                                 st.stored_dtcs.remove(i);
                             }
                             if st.stored_dtcs.is_empty() {
-                                ui.label(
-                                    RichText::new("(none)").color(Color32::from_gray(140)),
-                                );
+                                ui.label(RichText::new("(none)").color(Color32::from_gray(140)));
                             }
                         });
                     }
@@ -1022,9 +1019,7 @@ mod emulator {
                                 st.pending_dtcs.remove(i);
                             }
                             if st.pending_dtcs.is_empty() {
-                                ui.label(
-                                    RichText::new("(none)").color(Color32::from_gray(140)),
-                                );
+                                ui.label(RichText::new("(none)").color(Color32::from_gray(140)));
                             }
                         });
                     }
@@ -1040,8 +1035,7 @@ mod emulator {
                                 .desired_width(70.0)
                                 .char_limit(5),
                         );
-                        let submit = resp.lost_focus()
-                            && ui.input(|i| i.key_pressed(Key::Enter));
+                        let submit = resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
 
                         if ui.button("+ Stored").clicked() || submit {
                             let code = self.new_dtc.trim().to_uppercase();
@@ -1069,8 +1063,8 @@ mod emulator {
                     ui.add_space(4.0);
                     ui.horizontal_wrapped(|ui| {
                         for code in &[
-                            "P0420", "P0171", "P0300", "P0128", "P0442",
-                            "P0507", "P0101", "P0301", "P0172", "U0100",
+                            "P0420", "P0171", "P0300", "P0128", "P0442", "P0507", "P0101", "P0301",
+                            "P0172", "U0100",
                         ] {
                             if ui.small_button(*code).clicked() {
                                 let mut st = self.state.lock().unwrap();
@@ -1138,7 +1132,9 @@ fn main() {
         "OBD-II Emulator",
         native_options,
         Box::new(move |cc| {
-            Ok(Box::new(EmulatorApp::new(cc, state, slave_path, pty_error, WS_PORT)))
+            Ok(Box::new(EmulatorApp::new(
+                cc, state, slave_path, pty_error, WS_PORT,
+            )))
         }),
     )
     .unwrap();

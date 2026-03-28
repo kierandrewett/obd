@@ -41,7 +41,9 @@ impl DtcDatabase {
                 return Self::default();
             }
         };
-        Self { by_make: Self::normalise(raw) }
+        Self {
+            by_make: Self::normalise(raw),
+        }
     }
 
     fn load_dir(dir: &std::path::Path) -> Self {
@@ -70,15 +72,26 @@ impl DtcDatabase {
                     continue;
                 }
             };
-            by_make.insert(make, codes.into_iter().map(|(k, v)| (k.to_uppercase(), v)).collect());
+            by_make.insert(
+                make,
+                codes
+                    .into_iter()
+                    .map(|(k, v)| (k.to_uppercase(), v))
+                    .collect(),
+            );
         }
         Self { by_make }
     }
 
-    fn normalise(raw: HashMap<String, HashMap<String, String>>) -> HashMap<String, HashMap<String, String>> {
+    fn normalise(
+        raw: HashMap<String, HashMap<String, String>>,
+    ) -> HashMap<String, HashMap<String, String>> {
         raw.into_iter()
             .map(|(make, codes)| {
-                let codes = codes.into_iter().map(|(k, v)| (k.to_uppercase(), v)).collect();
+                let codes = codes
+                    .into_iter()
+                    .map(|(k, v)| (k.to_uppercase(), v))
+                    .collect();
                 (make.to_lowercase(), codes)
             })
             .collect()
@@ -89,7 +102,11 @@ impl DtcDatabase {
     /// Priority: manufacturer-specific → alias group → generic fallback.
     /// Returns `(description, alias_source)` where `alias_source` is `Some("chevrolet")` when
     /// the match came from an alias group rather than a direct match.
-    pub fn lookup_with_source<'a>(&'a self, make: &str, code: &str) -> Option<(&'a str, Option<&'static str>)> {
+    pub fn lookup_with_source<'a>(
+        &'a self,
+        make: &str,
+        code: &str,
+    ) -> Option<(&'a str, Option<&'static str>)> {
         // Strip regional qualifier: "Toyota (Australia)" → "toyota"
         let make_lc = make.split('(').next().unwrap_or(make).trim().to_lowercase();
         let code_uc = code.to_uppercase();
@@ -103,107 +120,76 @@ impl DtcDatabase {
         // Each entry is a slice of canonical make keys to try in sequence.
         let aliases: &[&'static str] = match make_lc.as_str() {
             // ── GM ───────────────────────────────────────────────────────────
-            "buick" | "gmc" | "cadillac" | "pontiac" | "holden"
-                => &["chevrolet", "oldsmobile", "saturn"],
-            "oldsmobile"
-                => &["chevrolet", "saturn"],
-            "saturn"
-                => &["chevrolet", "oldsmobile"],
+            "buick" | "gmc" | "cadillac" | "pontiac" | "holden" => {
+                &["chevrolet", "oldsmobile", "saturn"]
+            }
+            "oldsmobile" => &["chevrolet", "saturn"],
+            "saturn" => &["chevrolet", "oldsmobile"],
             // Opel/Vauxhall: GM until 2017, then PSA/Stellantis
-            "opel" | "vauxhall"
-                => &["chevrolet", "oldsmobile", "saturn", "citroen", "peugeot"],
+            "opel" | "vauxhall" => &["chevrolet", "oldsmobile", "saturn", "citroen", "peugeot"],
             // Saab: GM-owned 1990–2011
-            "saab"
-                => &["chevrolet", "oldsmobile", "saturn"],
+            "saab" => &["chevrolet", "oldsmobile", "saturn"],
             // Isuzu: long-running GM partnership, shared platforms
-            "isuzu"
-                => &["chevrolet", "oldsmobile"],
+            "isuzu" => &["chevrolet", "oldsmobile"],
 
             // ── Ford ─────────────────────────────────────────────────────────
-            "lincoln" | "mercury"
-                => &["ford"],
+            "lincoln" | "mercury" => &["ford"],
             // Jaguar/Land Rover: Ford-owned 1989–2008
-            "jaguar" | "land rover"
-                => &["ford", "lincoln"],
+            "jaguar" | "land rover" => &["ford", "lincoln"],
             // Mazda: Ford held 33% stake until 2008, shared many platforms
-            "mazda"
-                => &["ford"],
+            "mazda" => &["ford"],
             // Volvo Cars: Ford-owned 1999–2010
-            "volvo"
-                => &["ford", "lincoln"],
+            "volvo" => &["ford", "lincoln"],
 
             // ── Toyota group ─────────────────────────────────────────────────
-            "lexus" | "scion" | "nummi" | "daihatsu"
-                => &["toyota"],
+            "lexus" | "scion" | "nummi" | "daihatsu" => &["toyota"],
             // Subaru: Toyota holds ~20% stake, shares platforms (BRZ/GR86)
-            "subaru"
-                => &["toyota", "lexus"],
+            "subaru" => &["toyota", "lexus"],
             // Suzuki: Toyota cross-shareholding, shared kei/compact platforms
-            "suzuki"
-                => &["toyota"],
+            "suzuki" => &["toyota"],
 
             // ── Honda ────────────────────────────────────────────────────────
-            "acura" | "gac honda"
-                => &["honda"],
+            "acura" | "gac honda" => &["honda"],
 
             // ── Renault-Nissan-Mitsubishi alliance ───────────────────────────
-            "infiniti"
-                => &["nissan", "mitsubishi"],
-            "mitsubishi"
-                => &["nissan"],
-            "renault" | "dacia" | "renault samsung" | "alpine"
-                => &["nissan", "mitsubishi"],
+            "infiniti" => &["nissan", "mitsubishi"],
+            "mitsubishi" => &["nissan"],
+            "renault" | "dacia" | "renault samsung" | "alpine" => &["nissan", "mitsubishi"],
 
             // ── Stellantis US (Chrysler/FCA side) ────────────────────────────
-            "dodge" | "ram"
-                => &["chrysler", "jeep"],
-            "jeep"
-                => &["chrysler", "dodge"],
-            "chrysler"
-                => &["dodge", "jeep"],
+            "dodge" | "ram" => &["chrysler", "jeep"],
+            "jeep" => &["chrysler", "dodge"],
+            "chrysler" => &["dodge", "jeep"],
 
             // ── Stellantis EU / FCA cross-over ───────────────────────────────
             // Fiat-Chrysler merged 2014 — try both sides
-            "fiat"
-                => &["alfa romeo", "chrysler", "dodge", "citroen", "peugeot"],
-            "alfa romeo" | "lancia" | "maserati" | "abarth"
-                => &["fiat", "citroen", "peugeot"],
+            "fiat" => &["alfa romeo", "chrysler", "dodge", "citroen", "peugeot"],
+            "alfa romeo" | "lancia" | "maserati" | "abarth" => &["fiat", "citroen", "peugeot"],
 
             // ── Stellantis PSA side ──────────────────────────────────────────
-            "peugeot" | "ds automobiles" | "ds"
-                => &["citroen"],
-            "citroen"
-                => &["peugeot"],
+            "peugeot" | "ds automobiles" | "ds" => &["citroen"],
+            "citroen" => &["peugeot"],
 
             // ── VW Group ─────────────────────────────────────────────────────
-            "volkswagen"
-                => &["audi", "porsche"],
-            "audi" | "audi sport"
-                => &["volkswagen", "porsche"],
-            "porsche"
-                => &["audi", "volkswagen"],
-            "lamborghini"
-                => &["audi", "volkswagen", "porsche"],
-            "bentley" | "seat" | "cupra" | "skoda"
-            | "faw-volkswagen" | "shanghai volkswagen"
-                => &["volkswagen", "audi", "porsche"],
+            "volkswagen" => &["audi", "porsche"],
+            "audi" | "audi sport" => &["volkswagen", "porsche"],
+            "porsche" => &["audi", "volkswagen"],
+            "lamborghini" => &["audi", "volkswagen", "porsche"],
+            "bentley" | "seat" | "cupra" | "skoda" | "faw-volkswagen" | "shanghai volkswagen" => {
+                &["volkswagen", "audi", "porsche"]
+            }
 
             // ── BMW Group ────────────────────────────────────────────────────
-            "mini"
-                => &["bmw"],
-            "bmw m" | "bmw i" | "rolls-royce" | "alpina"
-                => &["bmw", "mini"],
+            "mini" => &["bmw"],
+            "bmw m" | "bmw i" | "rolls-royce" | "alpina" => &["bmw", "mini"],
 
             // ── Hyundai-Kia Group ────────────────────────────────────────────
-            "kia" | "genesis"
-                => &["hyundai"],
-            "hyundai"
-                => &["kia"],
+            "kia" | "genesis" => &["hyundai"],
+            "hyundai" => &["kia"],
 
             // ── Mercedes-Benz Group ──────────────────────────────────────────
             // smart: Mercedes joint venture until 2020 full acquisition
-            "smart"
-                => &["mercedes-benz"],
+            "smart" => &["mercedes-benz"],
 
             _ => &[],
         };
@@ -231,7 +217,12 @@ impl DtcDatabase {
     /// Returns `(description, make_name)` from the first match found, excluding
     /// `exclude_make` and the `_generic` bucket (already tried by `lookup`).
     pub fn lookup_any(&self, exclude_make: &str, code: &str) -> Option<(&str, &str)> {
-        let exclude = exclude_make.split('(').next().unwrap_or(exclude_make).trim().to_lowercase();
+        let exclude = exclude_make
+            .split('(')
+            .next()
+            .unwrap_or(exclude_make)
+            .trim()
+            .to_lowercase();
         let code_uc = code.to_uppercase();
         for (make, codes) in &self.by_make {
             if make == "_generic" || *make == exclude {
@@ -253,24 +244,23 @@ impl DtcDatabase {
 /// Used in the UI to explain why a description came from a related manufacturer.
 pub fn family_label(canonical: &str) -> &'static str {
     match canonical {
-        "chevrolet"  => "GM",
-        "toyota"     => "Toyota Group",
-        "honda"      => "Honda Group",
-        "nissan"     => "Renault-Nissan-Mitsubishi",
-        "ford"       => "Ford Group",
-        "chrysler"   => "Stellantis",
-        "fiat"       => "Stellantis",
+        "chevrolet" => "GM",
+        "toyota" => "Toyota Group",
+        "honda" => "Honda Group",
+        "nissan" => "Renault-Nissan-Mitsubishi",
+        "ford" => "Ford Group",
+        "chrysler" => "Stellantis",
+        "fiat" => "Stellantis",
         "volkswagen" => "VW Group",
-        "audi"       => "VW Group",
-        "bmw"        => "BMW Group",
-        "renault"    => "Renault Group",
-        "citroen"    => "Stellantis",
-        _            => "related manufacturer",
+        "audi" => "VW Group",
+        "bmw" => "BMW Group",
+        "renault" => "Renault Group",
+        "citroen" => "Stellantis",
+        _ => "related manufacturer",
     }
 }
 
 impl DtcDatabase {
-
     pub fn make_count(&self) -> usize {
         self.by_make.len()
     }
@@ -291,44 +281,47 @@ impl DtcDatabase {
     #[cfg(target_arch = "wasm32")]
     pub fn load_embedded() -> Self {
         let files: &[(&str, &str)] = &[
-            ("_generic",       include_str!("../dtc_codes/_generic.json")),
-            ("acura",          include_str!("../dtc_codes/acura.json")),
-            ("alfa romeo",     include_str!("../dtc_codes/alfa romeo.json")),
-            ("audi",           include_str!("../dtc_codes/audi.json")),
-            ("bmw",            include_str!("../dtc_codes/bmw.json")),
-            ("chevrolet",      include_str!("../dtc_codes/chevrolet.json")),
-            ("chrysler",       include_str!("../dtc_codes/chrysler.json")),
-            ("citroen",        include_str!("../dtc_codes/citroen.json")),
-            ("dodge",          include_str!("../dtc_codes/dodge.json")),
-            ("fiat",           include_str!("../dtc_codes/fiat.json")),
-            ("ford",           include_str!("../dtc_codes/ford.json")),
-            ("honda",          include_str!("../dtc_codes/honda.json")),
-            ("hyundai",        include_str!("../dtc_codes/hyundai.json")),
-            ("isuzu",          include_str!("../dtc_codes/isuzu.json")),
-            ("jaguar",         include_str!("../dtc_codes/jaguar.json")),
-            ("jeep",           include_str!("../dtc_codes/jeep.json")),
-            ("kia",            include_str!("../dtc_codes/kia.json")),
-            ("lamborghini",    include_str!("../dtc_codes/lamborghini.json")),
-            ("land rover",     include_str!("../dtc_codes/land rover.json")),
-            ("lexus",          include_str!("../dtc_codes/lexus.json")),
-            ("lincoln",        include_str!("../dtc_codes/lincoln.json")),
-            ("mazda",          include_str!("../dtc_codes/mazda.json")),
-            ("mercedes-benz",  include_str!("../dtc_codes/mercedes-benz.json")),
-            ("mercury",        include_str!("../dtc_codes/mercury.json")),
-            ("mini",           include_str!("../dtc_codes/mini.json")),
-            ("mitsubishi",     include_str!("../dtc_codes/mitsubishi.json")),
-            ("nissan",         include_str!("../dtc_codes/nissan.json")),
-            ("oldsmobile",     include_str!("../dtc_codes/oldsmobile.json")),
-            ("opel",           include_str!("../dtc_codes/opel.json")),
-            ("peugeot",        include_str!("../dtc_codes/peugeot.json")),
-            ("porsche",        include_str!("../dtc_codes/porsche.json")),
-            ("saab",           include_str!("../dtc_codes/saab.json")),
-            ("saturn",         include_str!("../dtc_codes/saturn.json")),
-            ("subaru",         include_str!("../dtc_codes/subaru.json")),
-            ("suzuki",         include_str!("../dtc_codes/suzuki.json")),
-            ("toyota",         include_str!("../dtc_codes/toyota.json")),
-            ("volkswagen",     include_str!("../dtc_codes/volkswagen.json")),
-            ("volvo",          include_str!("../dtc_codes/volvo.json")),
+            ("_generic", include_str!("../dtc_codes/_generic.json")),
+            ("acura", include_str!("../dtc_codes/acura.json")),
+            ("alfa romeo", include_str!("../dtc_codes/alfa romeo.json")),
+            ("audi", include_str!("../dtc_codes/audi.json")),
+            ("bmw", include_str!("../dtc_codes/bmw.json")),
+            ("chevrolet", include_str!("../dtc_codes/chevrolet.json")),
+            ("chrysler", include_str!("../dtc_codes/chrysler.json")),
+            ("citroen", include_str!("../dtc_codes/citroen.json")),
+            ("dodge", include_str!("../dtc_codes/dodge.json")),
+            ("fiat", include_str!("../dtc_codes/fiat.json")),
+            ("ford", include_str!("../dtc_codes/ford.json")),
+            ("honda", include_str!("../dtc_codes/honda.json")),
+            ("hyundai", include_str!("../dtc_codes/hyundai.json")),
+            ("isuzu", include_str!("../dtc_codes/isuzu.json")),
+            ("jaguar", include_str!("../dtc_codes/jaguar.json")),
+            ("jeep", include_str!("../dtc_codes/jeep.json")),
+            ("kia", include_str!("../dtc_codes/kia.json")),
+            ("lamborghini", include_str!("../dtc_codes/lamborghini.json")),
+            ("land rover", include_str!("../dtc_codes/land rover.json")),
+            ("lexus", include_str!("../dtc_codes/lexus.json")),
+            ("lincoln", include_str!("../dtc_codes/lincoln.json")),
+            ("mazda", include_str!("../dtc_codes/mazda.json")),
+            (
+                "mercedes-benz",
+                include_str!("../dtc_codes/mercedes-benz.json"),
+            ),
+            ("mercury", include_str!("../dtc_codes/mercury.json")),
+            ("mini", include_str!("../dtc_codes/mini.json")),
+            ("mitsubishi", include_str!("../dtc_codes/mitsubishi.json")),
+            ("nissan", include_str!("../dtc_codes/nissan.json")),
+            ("oldsmobile", include_str!("../dtc_codes/oldsmobile.json")),
+            ("opel", include_str!("../dtc_codes/opel.json")),
+            ("peugeot", include_str!("../dtc_codes/peugeot.json")),
+            ("porsche", include_str!("../dtc_codes/porsche.json")),
+            ("saab", include_str!("../dtc_codes/saab.json")),
+            ("saturn", include_str!("../dtc_codes/saturn.json")),
+            ("subaru", include_str!("../dtc_codes/subaru.json")),
+            ("suzuki", include_str!("../dtc_codes/suzuki.json")),
+            ("toyota", include_str!("../dtc_codes/toyota.json")),
+            ("volkswagen", include_str!("../dtc_codes/volkswagen.json")),
+            ("volvo", include_str!("../dtc_codes/volvo.json")),
         ];
         let mut by_make = std::collections::HashMap::new();
         for (make, content) in files {
@@ -339,7 +332,10 @@ impl DtcDatabase {
                 };
             by_make.insert(
                 make.to_string(),
-                codes.into_iter().map(|(k, v)| (k.to_uppercase(), v)).collect(),
+                codes
+                    .into_iter()
+                    .map(|(k, v)| (k.to_uppercase(), v))
+                    .collect(),
             );
         }
         Self { by_make }
