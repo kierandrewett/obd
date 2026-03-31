@@ -1,5 +1,5 @@
 # ── Build stage ───────────────────────────────────────────────────────────────
-FROM rust:1.85-slim AS builder
+FROM rust:1.88-slim AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         pkg-config \
@@ -12,11 +12,14 @@ WORKDIR /app
 
 # Cache dependencies before copying source
 COPY Cargo.toml Cargo.lock ./
-RUN mkdir -p src && echo "fn main(){}" > src/main.rs \
+RUN mkdir -p src src/bin \
+    && echo "fn main(){}" > src/main.rs \
+    && echo "pub fn _docker_dummy() {}" > src/lib.rs \
+    && echo "fn main(){}" > src/bin/emulator.rs \
     && cargo fetch
 
 COPY . .
-RUN trunk build --release
+RUN trunk build --release -M false
 
 # ── Serve stage ───────────────────────────────────────────────────────────────
 FROM nginx:alpine
