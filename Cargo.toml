@@ -34,6 +34,7 @@ serde_json = "1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 serialport = "4.7"
+libloading = "0.8"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 libc = "0.2"
 tungstenite = "0.24"

@@ -2183,6 +2183,7 @@ dependencies = [
  "gloo-timers",
  "js-sys",
  "libc",
+ "libloading",
  "serde",
  "serde_json",
  "serialport",

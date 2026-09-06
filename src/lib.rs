@@ -85,3 +85,5 @@ pub fn start() {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod elm_tcp;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod j2534;
