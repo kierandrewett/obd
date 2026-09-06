@@ -82,3 +82,6 @@ pub fn start() {
             .expect("failed to start eframe");
     });
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod elm_tcp;
