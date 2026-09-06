@@ -415,6 +415,7 @@ impl DiagnosticAdapter for J2534 {
         let deadline = Instant::now() + Duration::from_millis(timeout_ms);
         let mut replies = Vec::new();
         let mut last_reply = None;
+        let mut pending = std::collections::BTreeSet::new();
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
@@ -441,17 +442,29 @@ impl DiagnosticAdapter for J2534 {
                     if reply.payload.first() == Some(&(payload[0].wrapping_add(0x40)))
                         || reply.payload.starts_with(&[0x7F, payload[0]])
                     {
-                        replies.push(reply);
+                        if reply.payload == [0x7F, payload[0], 0x78] {
+                            pending.insert(reply.source);
+                        } else {
+                            pending.remove(&reply.source);
+                            replies.push(reply);
+                        }
                         last_reply = Some(Instant::now());
                     }
                 }
             }
-            if last_reply.is_some_and(|time| time.elapsed() >= Duration::from_millis(150)) {
+            if pending.is_empty()
+                && last_reply.is_some_and(|time| time.elapsed() >= Duration::from_millis(150))
+            {
                 break;
             }
             if count == 0 {
                 std::thread::sleep(Duration::from_millis(1));
             }
+        }
+        if !pending.is_empty() {
+            return Err(Elm327Error::Timeout(
+                "J2534: ECU response remained pending".into(),
+            ));
         }
         if replies.is_empty() {
             return Err(Elm327Error::Timeout("J2534: no vehicle response".into()));

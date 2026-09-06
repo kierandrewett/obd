@@ -88,6 +88,14 @@ fn native_driver_connects_reads_faults_and_vin_and_cleans_up_errors() {
             "a rejected clear must never be reported as success"
         );
         unsafe {
+            scenario(5);
+        }
+        assert!(block_on(request_hex(&mut adapter, "0100", 1000)).is_ok());
+        unsafe {
+            scenario(6);
+        }
+        assert!(block_on(request_hex(&mut adapter, "0100", 100)).is_err());
+        unsafe {
             scenario(0);
         }
     }

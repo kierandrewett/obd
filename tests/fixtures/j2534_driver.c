@@ -83,10 +83,14 @@ uint32_t PassThruReadMsgs(uint32_t channel, Message *message, uint32_t *count, u
     if (stage < 2) {
         message->rx_status = stage == 0 ? 8 : 2;
         message->data_size = 4;
-    } else if (stage == 3) {
+    } else if (stage == 3 && scenario != 5) {
         *count = 0;
         stage++;
         return 9;
+    } else if ((scenario == 5 || scenario == 6) && stage == 2) {
+        uint8_t pending[] = {0x7f, request[0], 0x78};
+        memcpy(message->data + 4, pending, 3);
+        message->data_size = 7;
     } else if (scenario == 3) {
         message->data_size = 9999;
     } else if (scenario == 4) {
