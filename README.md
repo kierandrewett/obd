@@ -1,6 +1,6 @@
 # OBD Dashboard
 
-A real-time OBD-II diagnostic dashboard for ELM327 adapters, built in Rust with [egui](https://github.com/emilk/egui). Runs as a native desktop app and as a web app (WASM) accessible from any browser.
+A real-time OBD-II diagnostic dashboard for ELM-compatible and J2534 adapters, built in Rust with [egui](https://github.com/emilk/egui). Runs as a native desktop app and as a web app (WASM) accessible from any browser.
 
 ## Features
 
@@ -19,15 +19,54 @@ A real-time OBD-II diagnostic dashboard for ELM327 adapters, built in Rust with 
 - **Screen wake lock** - Prevents screen sleep while polling is active (Linux, via `systemd-inhibit`)
 - **Dark/Light theme** - Toggle between dark and light mode from the tab bar
 
-## Supported Hardware
+## Supported connections
 
-Any **ELM327**-compatible OBD-II adapter connected via:
+| Connection | Desktop | Browser | Current diagnostic scope |
+|---|---|---|---|
+| ELM-compatible USB / serial | Yes | Web Serial | Standard OBD using the adapter's implemented protocols |
+| ELM-compatible Bluetooth serial | OS serial port required | Depends on browser/OS exposure | Same ELM diagnostic path |
+| ELM-compatible Wi-Fi / TCP | Yes, explicit host and port | Not directly | Same ELM diagnostic path |
+| J2534 04.04 vendor driver | Yes, matching native library required | Not directly | Standard ISO 15765 CAN at 250/500 kbit/s |
+| Legacy PSA VCI / Lexia / DiagBox-specific library | Not implemented | No | Requires a separate backend unless the device supplies a compatible J2534 driver |
 
-- USB (e.g. `/dev/ttyUSB0`)
-- Bluetooth serial (e.g. `/dev/rfcomm0`)
-- Native serial (e.g. `/dev/ttyS0`, `COM3`)
+The desktop connection selector is available above the dashboard and on the disconnected screen.
+Serial connections retain automatic port/baud detection. TCP connections need the adapter's documented
+host and port. Branded ELM-compatible identities such as OBDLink, STN, ELS and vLinker are accepted;
+initialisation also requires successful commands and a valid vehicle response.
 
-Tested protocols: ISO 15765-4 CAN (11-bit and 29-bit, 500/250 kbaud), ISO 9141-2, ISO 14230-4 KWP, SAE J1850.
+### J2534 setup
+
+1. Install the interface manufacturer's J2534 **04.04** driver.
+2. Select **J2534 pass-through**, then choose an installed driver or enter its absolute library path.
+3. Select the vehicle's CAN identifier format and rate. This backend does not automatically search protocols.
+4. For 29-bit CAN, set the ECU source address in hexadecimal. The default is `10`; check the vehicle
+   documentation. This connects to one selected ECU. The 11-bit connection accepts the standard
+   OBD response IDs `7E8` through `7EF`.
+5. Connect with the ignition on. The app requires a valid supported-PID response before reporting a connection.
+
+Windows driver discovery reads the registry view matching the app's architecture. A 32-bit driver needs
+an i686 app build; a 64-bit driver needs an x86_64 app build. A 05.00-only driver is not supported.
+The loader does not convert between architectures. No vendor drivers or OEM subscriptions are bundled.
+Only load a trusted manufacturer library: loading a native library executes its code in the application.
+
+The backend performs ISO-TP through the vendor driver, sets flow-control filters, retains response CAN IDs,
+ignores transmit/start indications and waits for pending ECU responses within the request deadline.
+The existing gauges, VIN, stored/pending DTCs and freeze-frame operations use this shared diagnostic path.
+The current screens still present standard OBD data rather than an inventory of individual modules.
+
+### Coverage limits
+
+Connection support does **not** establish compatibility with every vehicle or module. Manufacturer fault-code
+JSON files provide descriptions, not module access. Manufacturer-specific module discovery, manual/automatic
+bus switching, custom pin routing, legacy J2534 protocols, CAN FD, DoIP and security-gateway authentication
+are not implemented by the new J2534 backend. A capable interface does not add those application features.
+The existing corporate-family description fallback also remains; it is not a verified ECU-specific definition.
+
+Serial and TCP exchanges are tested against local simulators. J2534 is tested through a compiled native
+C library exercising the real 04.04 loader, addressing, filters, VIN, DTCs and error cleanup. No physical
+Ford/PSA/Opel/FCA adapter or vehicle has been validated for these new connections yet.
+
+See [adapter implementation notes](docs/adapters.md) and [remaining work](TODO.md).
 
 ## Installation
 
@@ -205,7 +244,10 @@ This is also written to `obd-debug.log`, so you can pipe it to an LLM for analys
 src/
   main.rs              Entry point, logging, OBD worker thread, GUI launch
   app.rs               egui application: tabs, gauges, controls, log panel
-  elm327.rs            ELM327 serial driver: auto-detect, init, send/receive
+  adapter.rs           Shared diagnostic payload interface and ELM response normalisation
+  elm327.rs            ELM327 serial driver: auto-detect, send/receive
+  elm_tcp.rs           Native TCP transport for ELM-compatible adapters
+  j2534.rs             Native J2534 04.04 loader and ISO 15765 diagnostics
   obd.rs               OBD-II PID definitions, decoders, DTC parsing
   obd_ops.rs           Shared async OBD operations (used by native and WASM)
   gauges.rs            Custom egui widgets: radial gauges, bar gauges, sparklines

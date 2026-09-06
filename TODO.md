@@ -1,11 +1,11 @@
 # Multiple adapter support
 
 - [x] Separate diagnostic requests from ELM adapter commands.
-- [ ] Add native TCP connections for ELM-compatible network adapters.
-- [ ] Add J2534 04.04 driver discovery and ISO 15765 OBD connections.
-- [ ] Expose connection selection in the desktop application.
-- [ ] Test shared operations through simulated serial/TCP and J2534 interfaces.
-- [ ] Document supported connections and hardware validation limits.
+- [x] Add native TCP connections for ELM-compatible network adapters.
+- [x] Add J2534 04.04 driver discovery and ISO 15765 OBD connections.
+- [x] Expose connection selection in the desktop application.
+- [x] Test shared operations through simulated serial/TCP and J2534 interfaces.
+- [x] Document supported connections and hardware validation limits.
 
 Later vehicle coverage work:
 
