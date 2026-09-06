@@ -13,8 +13,10 @@ fn main() {}
 #[cfg(not(target_arch = "wasm32"))]
 mod emulator {
     use eframe::egui::{self, Color32, Key, RichText, Slider};
+    #[cfg(unix)]
     use std::ffi::CStr;
     use std::net::TcpListener;
+    #[cfg(unix)]
     use std::os::unix::io::RawFd;
     use std::sync::{Arc, Mutex};
     use std::thread;
@@ -423,6 +425,7 @@ mod emulator {
 
     // ── PTY creation ─────────────────────────────────────────────────────────
 
+    #[cfg(unix)]
     pub fn create_pty() -> Result<(RawFd, String), String> {
         unsafe {
             let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
@@ -460,6 +463,7 @@ mod emulator {
 
     /// Spawns a background thread that reads commands from `master_fd` and writes
     /// ELM327-formatted responses.  Each response is terminated with `\r>`.
+    #[cfg(unix)]
     pub fn spawn_protocol(master_fd: RawFd, state: Arc<Mutex<SimState>>) {
         thread::spawn(move || {
             let mut buf: Vec<u8> = Vec::with_capacity(64);
@@ -1102,6 +1106,7 @@ fn main() {
     let state = Arc::new(Mutex::new(SimState::default()));
 
     // Create PTY
+    #[cfg(unix)]
     let (slave_path, pty_error) = match create_pty() {
         Ok((master_fd, path)) => {
             println!("OBD Emulator PTY port: {path}");
@@ -1114,6 +1119,12 @@ fn main() {
             ("/dev/null (PTY failed)".into(), Some(e))
         }
     };
+
+    #[cfg(not(unix))]
+    let (slave_path, pty_error) = (
+        String::new(),
+        Some("Serial PTY requires Unix; use the WebSocket connection".to_string()),
+    );
 
     // Start WebSocket server for web app connections
     spawn_websocket_server(WS_PORT, state.clone());
