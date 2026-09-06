@@ -14,11 +14,11 @@ mod vin_decoder;
 fn main() {}
 
 #[cfg(not(target_arch = "wasm32"))]
+use adapter::DiagnosticAdapter as _;
+#[cfg(not(target_arch = "wasm32"))]
 use app::{ObdApp, ObdEvent, OdbCmd};
 #[cfg(not(target_arch = "wasm32"))]
 use dtc_database::DtcDatabase;
-#[cfg(not(target_arch = "wasm32"))]
-use elm327::ElmAdapter as _;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Arc, Mutex, mpsc};
 #[cfg(not(target_arch = "wasm32"))]
@@ -124,43 +124,51 @@ fn main() {
 
 // ── OBD worker thread ───────────────────────────────────────────────────────
 
-/// Holds either a real serial ELM327 or (in debug builds) a WebSocket emulator connection.
+/// Native adapters share diagnostic operations without emulating ELM commands.
 #[cfg(not(target_arch = "wasm32"))]
-enum AnyElm {
+enum AnyAdapter {
     Serial(elm327::Elm327),
+    Tcp(elm_tcp::TcpElm),
+    J2534(j2534::J2534),
     #[cfg(debug_assertions)]
     Ws(elm327::WsElm327),
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl elm327::ElmAdapter for AnyElm {
-    async fn send(
+impl adapter::DiagnosticAdapter for AnyAdapter {
+    async fn request(
         &mut self,
-        cmd: &str,
+        payload: &[u8],
         timeout_ms: u64,
-    ) -> Result<Vec<String>, elm327::Elm327Error> {
+    ) -> Result<Vec<adapter::DiagnosticResponse>, elm327::Elm327Error> {
         match self {
-            Self::Serial(e) => e.send(cmd, timeout_ms).await,
+            Self::Serial(e) => e.request(payload, timeout_ms).await,
+            Self::Tcp(e) => e.request(payload, timeout_ms).await,
+            Self::J2534(e) => e.request(payload, timeout_ms).await,
             #[cfg(debug_assertions)]
-            Self::Ws(e) => e.send(cmd, timeout_ms).await,
+            Self::Ws(e) => e.request(payload, timeout_ms).await,
         }
     }
-    async fn sleep_ms(&mut self, ms: u64) {
-        std::thread::sleep(std::time::Duration::from_millis(ms));
-    }
-    fn info(&self) -> &elm327::ConnectionInfo {
+    fn connection_info(&self) -> &elm327::ConnectionInfo {
         match self {
-            Self::Serial(e) => e.info(),
+            Self::Serial(e) => e.connection_info(),
+            Self::Tcp(e) => e.connection_info(),
+            Self::J2534(e) => e.connection_info(),
             #[cfg(debug_assertions)]
-            Self::Ws(e) => e.info(),
+            Self::Ws(e) => e.connection_info(),
         }
     }
-    fn info_mut(&mut self) -> &mut elm327::ConnectionInfo {
+    async fn voltage(&mut self) -> Result<String, elm327::Elm327Error> {
         match self {
-            Self::Serial(e) => e.info_mut(),
+            Self::Serial(e) => e.voltage().await,
+            Self::Tcp(e) => e.voltage().await,
+            Self::J2534(e) => e.voltage().await,
             #[cfg(debug_assertions)]
-            Self::Ws(e) => e.info_mut(),
+            Self::Ws(e) => e.voltage().await,
         }
+    }
+    async fn delay(&mut self, ms: u64) {
+        std::thread::sleep(Duration::from_millis(ms));
     }
 }
 
@@ -172,7 +180,7 @@ fn obd_worker(
 ) {
     use app::PollConfig;
 
-    let mut elm: Option<AnyElm> = None;
+    let mut elm: Option<AnyAdapter> = None;
     let mut live_running = false;
     let mut poll_config = PollConfig::default();
     let mut current_make: Option<String> = None;
@@ -194,6 +202,9 @@ fn obd_worker(
         if let Some(cmd) = cmd {
             match cmd {
                 OdbCmd::Connect { port, baud } => {
+                    elm = None;
+                    live_running = false;
+                    current_make = None;
                     let _ =
                         event_tx.send(ObdEvent::Connecting("Scanning for OBD adapter...".into()));
 
@@ -208,24 +219,33 @@ fn obd_worker(
                         elm327::auto_connect(Some(&progress))
                     };
 
-                    match result {
-                        Ok(device) => {
-                            let info = device.info.clone();
-                            elm = Some(AnyElm::Serial(device));
-                            let _ = event_tx.send(ObdEvent::Connected(info));
+                    finish_connection(result.map(AnyAdapter::Serial), &mut elm, &event_tx);
+                }
 
-                            // Read voltage + VIN on connect
-                            if let Some(ref mut e) = elm {
-                                if let Ok(v) = elm327::block_on(e.read_voltage()) {
-                                    let _ = event_tx.send(ObdEvent::Voltage(v));
-                                }
-                                elm327::block_on(obd_ops::read_vin(e, &event_tx));
-                            }
+                OdbCmd::ConnectAdapter(config) => {
+                    elm = None;
+                    live_running = false;
+                    current_make = None;
+                    let _ = event_tx.send(ObdEvent::Connecting("Connecting to adapter...".into()));
+                    let result = match config {
+                        app::NativeConnection::Tcp(address) => {
+                            elm_tcp::TcpElm::connect(&address, |message| {
+                                let _ = event_tx.send(ObdEvent::Connecting(message.into()));
+                            })
+                            .map(AnyAdapter::Tcp)
                         }
-                        Err(e) => {
-                            let _ = event_tx.send(ObdEvent::ConnectionFailed(e.to_string()));
-                        }
-                    }
+                        app::NativeConnection::J2534 {
+                            library,
+                            protocol,
+                            ecu_address,
+                        } => j2534::J2534::connect_to(
+                            std::path::Path::new(&library),
+                            protocol,
+                            ecu_address,
+                        )
+                        .map(AnyAdapter::J2534),
+                    };
+                    finish_connection(result, &mut elm, &event_tx);
                 }
 
                 OdbCmd::Disconnect => {
@@ -302,6 +322,9 @@ fn obd_worker(
                 }
 
                 OdbCmd::ConnectLocal { ws_port } => {
+                    elm = None;
+                    live_running = false;
+                    current_make = None;
                     #[cfg(debug_assertions)]
                     {
                         let addr = format!("127.0.0.1:{ws_port}");
@@ -313,17 +336,11 @@ fn obd_worker(
                                 match elm327::block_on(obd_ops::init_elm(&mut ws_elm, move |msg| {
                                     let _ = init_tx.send(ObdEvent::Connecting(msg.to_string()));
                                 })) {
-                                    Ok(()) => {
-                                        let info = ws_elm.info.clone();
-                                        elm = Some(AnyElm::Ws(ws_elm));
-                                        let _ = event_tx.send(ObdEvent::Connected(info));
-                                        if let Some(ref mut e) = elm {
-                                            if let Ok(v) = elm327::block_on(e.read_voltage()) {
-                                                let _ = event_tx.send(ObdEvent::Voltage(v));
-                                            }
-                                            elm327::block_on(obd_ops::read_vin(e, &event_tx));
-                                        }
-                                    }
+                                    Ok(()) => finish_connection(
+                                        Ok(AnyAdapter::Ws(ws_elm)),
+                                        &mut elm,
+                                        &event_tx,
+                                    ),
                                     Err(e) => {
                                         let _ = event_tx
                                             .send(ObdEvent::ConnectionFailed(e.to_string()));
@@ -357,7 +374,7 @@ fn obd_worker(
                 ));
 
                 // Also poll voltage periodically (every poll cycle includes it)
-                if let Ok(v) = elm327::block_on(e.read_voltage()) {
+                if let Ok(v) = elm327::block_on(e.voltage()) {
                     let _ = event_tx.send(ObdEvent::Voltage(v));
                 }
 
@@ -404,4 +421,30 @@ fn title_case(s: &str) -> String {
         c.make_ascii_uppercase();
     }
     t
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+mod elm_tcp;
+#[cfg(not(target_arch = "wasm32"))]
+mod j2534;
+
+#[cfg(not(target_arch = "wasm32"))]
+fn finish_connection(
+    result: Result<AnyAdapter, elm327::Elm327Error>,
+    adapter: &mut Option<AnyAdapter>,
+    events: &mpsc::Sender<ObdEvent>,
+) {
+    match result {
+        Ok(mut device) => {
+            let _ = events.send(ObdEvent::Connected(device.connection_info().clone()));
+            if let Ok(voltage) = elm327::block_on(device.voltage()) {
+                let _ = events.send(ObdEvent::Voltage(voltage));
+            }
+            elm327::block_on(obd_ops::read_vin(&mut device, events));
+            *adapter = Some(device);
+        }
+        Err(error) => {
+            let _ = events.send(ObdEvent::ConnectionFailed(error.to_string()));
+        }
+    }
 }

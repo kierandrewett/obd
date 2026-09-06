@@ -54,12 +54,34 @@ use std::time::Duration;
 
 // ── Messages between OBD thread and GUI ─────────────────────────────────────
 
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug)]
+pub enum NativeConnection {
+    Tcp(String),
+    J2534 {
+        library: String,
+        protocol: crate::j2534::CanProtocol,
+        ecu_address: u8,
+    },
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default, PartialEq, Eq)]
+enum ConnectionKind {
+    #[default]
+    Serial,
+    Tcp,
+    J2534,
+}
+
 #[derive(Debug)]
 pub enum OdbCmd {
     Connect {
         port: Option<String>,
         baud: Option<u32>,
     },
+    #[cfg(not(target_arch = "wasm32"))]
+    ConnectAdapter(NativeConnection),
     /// Connect to a local OBD emulator via WebSocket (web only).
     ConnectLocal {
         ws_port: u16,
@@ -167,6 +189,19 @@ pub struct ObdApp {
     connection_info: Option<ConnectionInfo>,
     connection_status: String,
 
+    #[cfg(not(target_arch = "wasm32"))]
+    connection_kind: ConnectionKind,
+    #[cfg(not(target_arch = "wasm32"))]
+    tcp_address: String,
+    #[cfg(not(target_arch = "wasm32"))]
+    j2534_library: String,
+    #[cfg(not(target_arch = "wasm32"))]
+    j2534_protocol: crate::j2534::CanProtocol,
+    #[cfg(not(target_arch = "wasm32"))]
+    j2534_ecu_address: u8,
+    #[cfg(not(target_arch = "wasm32"))]
+    j2534_drivers: Vec<crate::j2534::DriverInfo>,
+
     // Port selection
     available_ports: Vec<String>,
     selected_port: Option<String>,
@@ -232,6 +267,19 @@ impl ObdApp {
         event_rx: mpsc::Receiver<ObdEvent>,
         #[cfg(not(target_arch = "wasm32"))] log_file: Option<Arc<Mutex<std::fs::File>>>,
     ) -> Self {
+        Self::new_state(
+            cmd_tx,
+            event_rx,
+            #[cfg(not(target_arch = "wasm32"))]
+            log_file,
+        )
+    }
+
+    fn new_state(
+        cmd_tx: mpsc::Sender<OdbCmd>,
+        event_rx: mpsc::Receiver<ObdEvent>,
+        #[cfg(not(target_arch = "wasm32"))] log_file: Option<Arc<Mutex<std::fs::File>>>,
+    ) -> Self {
         #[cfg(not(target_arch = "wasm32"))]
         let available_ports = crate::elm327::scan_ports();
         #[cfg(target_arch = "wasm32")]
@@ -246,6 +294,18 @@ impl ObdApp {
             connecting: false,
             connection_info: None,
             connection_status: "Disconnected".to_string(),
+            #[cfg(not(target_arch = "wasm32"))]
+            connection_kind: ConnectionKind::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            tcp_address: String::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            j2534_library: String::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            j2534_protocol: crate::j2534::CanProtocol::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            j2534_ecu_address: 0x10,
+            #[cfg(not(target_arch = "wasm32"))]
+            j2534_drivers: crate::j2534::discover_drivers(),
             available_ports,
             selected_port: None,
             selected_baud: None,
@@ -282,6 +342,22 @@ impl ObdApp {
         while let Ok(event) = self.event_rx.try_recv() {
             match event {
                 ObdEvent::Connecting(msg) => {
+                    if !self.connecting {
+                        self.connected = false;
+                        self.live_running = false;
+                        self.connection_info = None;
+                        self.vin = None;
+                        self.voltage = None;
+                        self.live_data.clear();
+                        self.supported_pids.clear();
+                        self.stored_dtcs.clear();
+                        self.pending_dtcs.clear();
+                        self.dtc_status.clear();
+                        self.freeze_data.clear();
+                        self.freeze_frame_read = false;
+                        self.clear_dtc_confirm = false;
+                        self.release_wake_lock();
+                    }
                     self.connecting = true;
                     self.connection_status = msg.clone();
                     self.add_log(&format!("[CONNECT] {msg}"));
@@ -289,10 +365,14 @@ impl ObdApp {
                 ObdEvent::Connected(info) => {
                     self.connected = true;
                     self.connecting = false;
-                    self.connection_status = format!(
-                        "Connected: {} @ {} baud | {}",
-                        info.port, info.baud, info.protocol
-                    );
+                    self.connection_status = if info.baud == 0 {
+                        format!("Connected: {} | {}", info.port, info.protocol)
+                    } else {
+                        format!(
+                            "Connected: {} @ {} baud | {}",
+                            info.port, info.baud, info.protocol
+                        )
+                    };
                     self.add_log(&format!(
                         "[CONNECTED] port={} baud={} protocol={} elm={}",
                         info.port, info.baud, info.protocol, info.elm_version
@@ -472,8 +552,132 @@ impl ObdApp {
 
     // ── UI Sections ─────────────────────────────────────────────────────────
 
+    fn connect_selected(&self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        match self.connection_kind {
+            ConnectionKind::Tcp => {
+                self.send_cmd(OdbCmd::ConnectAdapter(NativeConnection::Tcp(
+                    self.tcp_address.trim().into(),
+                )));
+                return;
+            }
+            ConnectionKind::J2534 => {
+                self.send_cmd(OdbCmd::ConnectAdapter(NativeConnection::J2534 {
+                    library: self.j2534_library.trim().into(),
+                    protocol: self.j2534_protocol,
+                    ecu_address: self.j2534_ecu_address,
+                }));
+                return;
+            }
+            ConnectionKind::Serial => {}
+        }
+        self.send_cmd(OdbCmd::Connect {
+            port: self.selected_port.clone(),
+            baud: self.selected_baud,
+        });
+    }
+
+    fn show_adapter_selector(&mut self, ui: &mut egui::Ui) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            egui::ComboBox::from_id_salt(ui.id().with("adapter_kind"))
+                .selected_text(match self.connection_kind {
+                    ConnectionKind::Serial => "USB / serial",
+                    ConnectionKind::Tcp => "Wi-Fi / TCP",
+                    ConnectionKind::J2534 => "J2534 pass-through",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut self.connection_kind,
+                        ConnectionKind::Serial,
+                        "USB / serial (ELM-compatible)",
+                    );
+                    ui.selectable_value(
+                        &mut self.connection_kind,
+                        ConnectionKind::Tcp,
+                        "Wi-Fi / TCP (ELM-compatible)",
+                    );
+                    ui.selectable_value(
+                        &mut self.connection_kind,
+                        ConnectionKind::J2534,
+                        "J2534 pass-through",
+                    );
+                });
+            match self.connection_kind {
+                ConnectionKind::Tcp => {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.tcp_address)
+                            .hint_text("Adapter host:port")
+                            .desired_width(190.0),
+                    );
+                    return;
+                }
+                ConnectionKind::J2534 => {
+                    egui::ComboBox::from_id_salt(ui.id().with("j2534_driver"))
+                        .selected_text("Installed drivers")
+                        .show_ui(ui, |ui| {
+                            for driver in &self.j2534_drivers {
+                                if ui
+                                    .selectable_label(
+                                        self.j2534_library == driver.path.to_string_lossy(),
+                                        &driver.name,
+                                    )
+                                    .clicked()
+                                {
+                                    self.j2534_library = driver.path.to_string_lossy().into_owned();
+                                }
+                            }
+                            if self.j2534_drivers.is_empty() {
+                                ui.label("No matching drivers found");
+                            }
+                        });
+                    if ui.button("Refresh drivers").clicked() {
+                        self.j2534_drivers = crate::j2534::discover_drivers();
+                    }
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.j2534_library)
+                            .hint_text("Absolute driver library path")
+                            .desired_width(240.0),
+                    );
+                    egui::ComboBox::from_id_salt(ui.id().with("j2534_protocol"))
+                        .selected_text(self.j2534_protocol.label())
+                        .show_ui(ui, |ui| {
+                            for protocol in crate::j2534::CanProtocol::ALL {
+                                ui.selectable_value(
+                                    &mut self.j2534_protocol,
+                                    protocol,
+                                    protocol.label(),
+                                );
+                            }
+                        });
+                    if self.j2534_protocol.extended() {
+                        ui.label("ECU address:");
+                        ui.add(egui::DragValue::new(&mut self.j2534_ecu_address).hexadecimal(2, false, true))
+                            .on_hover_text("29-bit response source address in hex. Default 10; set from vehicle documentation. This connection queries one ECU.");
+                    }
+                    ui.label("04.04 driver; standard CAN diagnostics only")
+                        .on_hover_text("Driver must match the app's 32/64-bit architecture. Legacy protocols, manufacturer modules and PSA-specific drivers are not yet supported by this backend.");
+                    return;
+                }
+                ConnectionKind::Serial => {}
+            }
+        }
+        egui::ComboBox::from_id_salt(ui.id().with("serial_port"))
+            .selected_text(self.selected_port.as_deref().unwrap_or("Auto-detect"))
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut self.selected_port, None, "Auto-detect");
+                for port in &self.available_ports {
+                    ui.selectable_value(&mut self.selected_port, Some(port.clone()), port);
+                }
+            });
+        #[cfg(not(target_arch = "wasm32"))]
+        if ui.button("Refresh ports").clicked() {
+            self.available_ports = crate::elm327::scan_ports();
+        }
+    }
+
     fn show_connection_bar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             // Status indicator
             let (status_color, status_text) = if self.connected {
                 (Color32::from_rgb(50, 200, 80), "Connected")
@@ -510,26 +714,10 @@ impl ObdApp {
                     }
                 });
             } else if !self.connecting {
-                // Port selector
-                egui::ComboBox::from_label("")
-                    .selected_text(self.selected_port.as_deref().unwrap_or("Auto-detect"))
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.selected_port, None, "Auto-detect");
-                        for port in &self.available_ports {
-                            ui.selectable_value(&mut self.selected_port, Some(port.clone()), port);
-                        }
-                    });
-
-                #[cfg(not(target_arch = "wasm32"))]
-                if ui.button("Refresh ports").clicked() {
-                    self.available_ports = crate::elm327::scan_ports();
-                }
+                self.show_adapter_selector(ui);
 
                 if ui.button(RichText::new("Connect").strong()).clicked() {
-                    self.send_cmd(OdbCmd::Connect {
-                        port: self.selected_port.clone(),
-                        baud: self.selected_baud,
-                    });
+                    self.connect_selected();
                 }
 
                 #[cfg(any(target_arch = "wasm32", debug_assertions))]
@@ -748,25 +936,8 @@ impl ObdApp {
 
                 // Port selector
                 ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("Port:").color(Color32::from_gray(140)));
-                        egui::ComboBox::from_id_salt("port_select_main")
-                            .width(200.0)
-                            .selected_text(self.selected_port.as_deref().unwrap_or("Auto-detect"))
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut self.selected_port, None, "Auto-detect");
-                                for port in &self.available_ports {
-                                    ui.selectable_value(
-                                        &mut self.selected_port,
-                                        Some(port.clone()),
-                                        port,
-                                    );
-                                }
-                            });
-                        #[cfg(not(target_arch = "wasm32"))]
-                        if ui.small_button("Refresh").clicked() {
-                            self.available_ports = crate::elm327::scan_ports();
-                        }
+                    ui.horizontal_wrapped(|ui| {
+                        self.show_adapter_selector(ui);
                     });
                 });
 
@@ -782,11 +953,8 @@ impl ObdApp {
                 .fill(Color32::from_rgb(40, 120, 200))
                 .corner_radius(12.0);
 
-                if ui.add(button).clicked() {
-                    self.send_cmd(OdbCmd::Connect {
-                        port: self.selected_port.clone(),
-                        baud: self.selected_baud,
-                    });
+                if ui.add_enabled(!self.connecting, button).clicked() {
+                    self.connect_selected();
                 }
 
                 ui.add_space(12.0);
@@ -799,7 +967,7 @@ impl ObdApp {
                     );
                 } else {
                     ui.label(
-                        RichText::new("Select a port or auto-detect and connect")
+                        RichText::new("Select an adapter connection and connect")
                             .color(Color32::from_gray(100)),
                     );
                 }
@@ -1481,7 +1649,7 @@ impl ObdApp {
                     .num_columns(2)
                     .spacing([20.0, 6.0])
                     .show(ui, |ui| {
-                        ui.label(RichText::new("ELM Version:").strong());
+                        ui.label(RichText::new("Adapter interface:").strong());
                         ui.label(&info.elm_version);
                         ui.end_row();
 
@@ -1493,9 +1661,11 @@ impl ObdApp {
                         ui.label(RichText::new(&info.port).monospace());
                         ui.end_row();
 
-                        ui.label(RichText::new("Baud Rate:").strong());
-                        ui.label(format!("{} baud", info.baud));
-                        ui.end_row();
+                        if info.baud != 0 {
+                            ui.label(RichText::new("Serial baud rate:").strong());
+                            ui.label(format!("{} baud", info.baud));
+                            ui.end_row();
+                        }
                     });
             }
 
@@ -1767,5 +1937,63 @@ impl eframe::App for ObdApp {
                     ui.add_space(4.0);
                 });
         }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod adapter_ui_tests {
+    use super::*;
+
+    #[test]
+    fn adapter_selection_routes_commands_and_reconnection_clears_vehicle_state() {
+        let (commands, command_rx) = mpsc::channel();
+        let (events, event_rx) = mpsc::channel();
+        let mut app = ObdApp::new_state(commands, event_rx, None);
+        let context = egui::Context::default();
+        for kind in [
+            ConnectionKind::Serial,
+            ConnectionKind::Tcp,
+            ConnectionKind::J2534,
+        ] {
+            app.connection_kind = kind;
+            app.tcp_address = "127.0.0.1:35000".into();
+            app.j2534_library = "C:\\Vendor\\driver.dll".into();
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1100.0, 750.0),
+                )),
+                ..Default::default()
+            };
+            let output = context.run(input, |ctx| {
+                egui::TopBottomPanel::top("connection").show(ctx, |ui| app.show_connection_bar(ui));
+                egui::CentralPanel::default().show(ctx, |ui| app.show_dashboard(ui));
+            });
+            assert!(!output.shapes.is_empty());
+            app.connect_selected();
+            match (command_rx.recv().unwrap(), &app.connection_kind) {
+                (OdbCmd::Connect { .. }, ConnectionKind::Serial) => {}
+                (OdbCmd::ConnectAdapter(NativeConnection::Tcp(address)), ConnectionKind::Tcp) => {
+                    assert_eq!(address, "127.0.0.1:35000");
+                }
+                (
+                    OdbCmd::ConnectAdapter(NativeConnection::J2534 { library, .. }),
+                    ConnectionKind::J2534,
+                ) => {
+                    assert_eq!(library, app.j2534_library);
+                }
+                _ => panic!("Selected adapter did not reach worker command"),
+            }
+        }
+        app.connected = true;
+        app.vin = Some("OLD VEHICLE".into());
+        app.voltage = Some("12.6V".into());
+        events
+            .send(ObdEvent::Connecting("New adapter".into()))
+            .unwrap();
+        app.process_events();
+        assert!(!app.connected);
+        assert!(app.vin.is_none());
+        assert!(app.voltage.is_none());
     }
 }
