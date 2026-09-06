@@ -1222,22 +1222,33 @@ pub fn parse_elm_response(cmd: &str, lines: &[String]) -> Option<Vec<u8>> {
 
 /// Parse DTC response lines (mode 03/07/0A)
 pub fn parse_dtc_response_lines(lines: &[String], response_prefix: &str) -> Vec<Dtc> {
-    let mut all_bytes = Vec::new();
+    let mut codes = Vec::new();
     for line in lines {
         let clean = line.replace(' ', "").to_uppercase();
-        if !clean.starts_with(response_prefix) {
+        let Some(data) = clean.strip_prefix(response_prefix) else {
+            continue;
+        };
+        if data.is_empty() {
             continue;
         }
-        let data_part = &clean[response_prefix.len()..];
-        let mut i = 0;
-        while i + 1 < data_part.len() {
-            if let Ok(byte) = u8::from_str_radix(&data_part[i..i + 2], 16) {
-                all_bytes.push(byte);
+        let Ok(bytes) = crate::adapter::decode_hex(data) else {
+            continue;
+        };
+        // CAN OBD includes a count byte; legacy replies contain DTC pairs.
+        // Decode each ECU separately so counts and padding cannot join replies.
+        let data = if bytes.len() % 2 == 1 {
+            let count = bytes[0] as usize;
+            let end = 1 + count * 2;
+            if end > bytes.len() {
+                continue;
             }
-            i += 2;
-        }
+            &bytes[1..end]
+        } else {
+            &bytes[..]
+        };
+        codes.extend(decode_dtc_response(data));
     }
-    decode_dtc_response(&all_bytes)
+    codes
 }
 
 /// Parse multi-line encoded string response (VIN, Calibration ID, etc.)

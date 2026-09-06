@@ -1,3 +1,4 @@
+pub mod adapter;
 pub mod app;
 pub mod dtc_database;
 pub mod dtc_descriptions;

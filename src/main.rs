@@ -1,3 +1,4 @@
+mod adapter;
 mod app;
 mod dtc_database;
 mod dtc_descriptions;

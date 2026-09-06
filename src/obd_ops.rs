@@ -1,9 +1,10 @@
 //! OBD operations shared across desktop and WASM targets.
 //!
-//! All functions are `async` and generic over [`ElmAdapter`].
+//! Diagnostic functions use [`DiagnosticAdapter`]; initialisation remains adapter-specific.
 //! - Desktop calls them via `elm327::block_on(obd_ops::foo(...))`
 //! - WASM calls them with `.await`
 
+use crate::adapter::{DiagnosticAdapter, request_hex};
 use crate::app::{ObdEvent, PollConfig, PollMode};
 use crate::elm327::{Elm327Error, ElmAdapter, decode_protocol};
 use crate::obd;
@@ -20,33 +21,37 @@ where
     let _ = elm.send("ATZ", 2000).await;
     elm.sleep_ms(500).await;
 
-    elm.send("ATE0", 1000).await?; // echo off
-    elm.send("ATL0", 1000).await?; // linefeeds off
-    elm.send("ATS0", 1000).await?; // spaces off
-    elm.send("ATH0", 1000).await?; // headers off
-    elm.send("ATSP0", 2000).await?; // auto-detect protocol
-
-    // Read firmware version string.
-    if let Ok(lines) = elm.send("ATI", 1000).await {
-        if let Some(ver) = lines.iter().find(|l| l.contains("ELM")) {
-            elm.info_mut().elm_version = ver.clone();
+    for command in ["ATE0", "ATL0", "ATS0", "ATH0", "ATSP0"] {
+        let lines = elm.send(command, 2000).await?;
+        if !lines.iter().any(|line| line.trim() == "OK") {
+            return Err(Elm327Error::InitFailed(format!(
+                "{command} rejected: {}",
+                lines.join(" | ")
+            )));
         }
     }
 
-    // Trigger protocol detection with a real OBD request.
-    status("Detecting OBD protocol…");
-    match elm.send("0100", 8000).await {
-        Ok(lines) => {
-            if lines
+    // Branded compatible adapters need not report the literal ELM327 name.
+    if let Ok(lines) = elm.send("ATI", 1000).await {
+        if let Some(version) = lines.iter().find(|line| {
+            let upper = line.to_ascii_uppercase();
+            ["ELM", "OBDLINK", "STN", "ELS", "VLINKER"]
                 .iter()
-                .any(|l| l.contains("UNABLE") || l.contains("NO DATA") || l.contains("BUS INIT"))
-            {
-                return Err(Elm327Error::ProtocolError(
-                    "Vehicle not responding — is the ignition on?".into(),
-                ));
-            }
+                .any(|name| upper.contains(name))
+        }) {
+            elm.info_mut().elm_version = version.clone();
         }
-        Err(e) => return Err(Elm327Error::InitFailed(format!("Protocol detection: {e}"))),
+    }
+
+    status("Detecting OBD protocol...");
+    let lines = request_hex(elm, "0100", 8000).await?;
+    if !lines
+        .iter()
+        .any(|line| line.starts_with("4100") && line.len() >= 12)
+    {
+        return Err(Elm327Error::InitFailed(
+            "No supported-PID response; check ignition and adapter connection".into(),
+        ));
     }
 
     if let Ok(lines) = elm.send("ATDPN", 1000).await {
@@ -67,17 +72,23 @@ where
 /// Sends `DtcResult` immediately with codes and `DescSource::Pending` descriptions
 /// so the UI can display codes right away.  Returns the raw lists so the caller
 /// can enrich descriptions in a background task.
-pub async fn read_dtcs<A: ElmAdapter>(
+pub async fn read_dtcs<A: DiagnosticAdapter>(
     elm: &mut A,
     event_tx: &mpsc::Sender<ObdEvent>,
 ) -> (Vec<obd::Dtc>, Vec<obd::Dtc>) {
-    let stored = match elm.send("03", 5000).await {
+    let stored = match request_hex(elm, "03", 5000).await {
         Ok(lines) => obd::parse_dtc_response_lines(&lines, "43"),
-        Err(_) => Vec::new(),
+        Err(error) => {
+            let _ = event_tx.send(ObdEvent::Error(format!("Stored DTC read failed: {error}")));
+            return (Vec::new(), Vec::new());
+        }
     };
-    let pending = match elm.send("07", 5000).await {
+    let pending = match request_hex(elm, "07", 5000).await {
         Ok(lines) => obd::parse_dtc_response_lines(&lines, "47"),
-        Err(_) => Vec::new(),
+        Err(error) => {
+            let _ = event_tx.send(ObdEvent::Error(format!("Pending DTC read failed: {error}")));
+            return (Vec::new(), Vec::new());
+        }
     };
     let _ = event_tx.send(ObdEvent::DtcResult {
         stored: stored.clone(),
@@ -88,11 +99,11 @@ pub async fn read_dtcs<A: ElmAdapter>(
 
 /// Clear all DTCs (Mode 04) then re-read to confirm.
 /// Same immediate-send behaviour as `read_dtcs`.
-pub async fn clear_dtcs<A: ElmAdapter>(
+pub async fn clear_dtcs<A: DiagnosticAdapter>(
     elm: &mut A,
     event_tx: &mpsc::Sender<ObdEvent>,
 ) -> (Vec<obd::Dtc>, Vec<obd::Dtc>) {
-    match elm.send("04", 5000).await {
+    match request_hex(elm, "04", 5000).await {
         Ok(_) => {
             let _ = event_tx.send(ObdEvent::LogMessage("[DTC_CLEAR] DTCs cleared".into()));
             read_dtcs(elm, event_tx).await
@@ -105,8 +116,8 @@ pub async fn clear_dtcs<A: ElmAdapter>(
 }
 
 /// Read the VIN via Mode 09 PID 02.
-pub async fn read_vin<A: ElmAdapter>(elm: &mut A, event_tx: &mpsc::Sender<ObdEvent>) {
-    match elm.send("0902", 5000).await {
+pub async fn read_vin<A: DiagnosticAdapter>(elm: &mut A, event_tx: &mpsc::Sender<ObdEvent>) {
+    match request_hex(elm, "0902", 5000).await {
         Ok(lines) => {
             let vin = obd::parse_encoded_string_response(&lines, "4902")
                 .unwrap_or_else(|| "Not available".into());
@@ -119,7 +130,7 @@ pub async fn read_vin<A: ElmAdapter>(elm: &mut A, event_tx: &mpsc::Sender<ObdEve
 }
 
 /// Poll a set of Mode 01 PIDs determined by `poll_config.mode`.
-pub async fn poll_live_data<A: ElmAdapter>(
+pub async fn poll_live_data<A: DiagnosticAdapter>(
     elm: &mut A,
     event_tx: &mpsc::Sender<ObdEvent>,
     pid_defs: &[obd::PidDef],
@@ -139,7 +150,7 @@ pub async fn poll_live_data<A: ElmAdapter>(
             Some(p) => p,
             None => continue,
         };
-        if let Ok(lines) = elm.send(cmd, 2000).await {
+        if let Ok(lines) = request_hex(elm, cmd, 2000).await {
             let raw = lines.join("|");
             if let Some(data_bytes) = obd::parse_elm_response(cmd, &lines) {
                 let _ = event_tx.send(ObdEvent::LiveData {
@@ -152,13 +163,13 @@ pub async fn poll_live_data<A: ElmAdapter>(
             }
         }
         if poll_config.inter_pid_delay_ms > 0 {
-            elm.sleep_ms(poll_config.inter_pid_delay_ms).await;
+            elm.delay(poll_config.inter_pid_delay_ms).await;
         }
     }
 }
 
 /// Read freeze frame data (Mode 02) for a standard set of PIDs.
-pub async fn read_freeze_frame<A: ElmAdapter>(
+pub async fn read_freeze_frame<A: DiagnosticAdapter>(
     elm: &mut A,
     event_tx: &mpsc::Sender<ObdEvent>,
     pid_defs: &[obd::PidDef],
@@ -174,7 +185,7 @@ pub async fn read_freeze_frame<A: ElmAdapter>(
             Some(p) => p,
             None => continue,
         };
-        if let Ok(lines) = elm.send(&cmd, 3000).await {
+        if let Ok(lines) = request_hex(elm, &cmd, 3000).await {
             let prefix_42 = format!("42{}", &pid01[2..4]);
             for line in &lines {
                 let clean = line.replace(' ', "").to_uppercase();
@@ -204,10 +215,13 @@ pub async fn read_freeze_frame<A: ElmAdapter>(
 }
 
 /// Query supported PIDs across the four standard Mode 01 ranges.
-pub async fn query_supported_pids<A: ElmAdapter>(elm: &mut A, event_tx: &mpsc::Sender<ObdEvent>) {
+pub async fn query_supported_pids<A: DiagnosticAdapter>(
+    elm: &mut A,
+    event_tx: &mpsc::Sender<ObdEvent>,
+) {
     let mut all_supported = Vec::new();
     for range in &["0100", "0120", "0140", "0160"] {
-        match elm.send(range, 2000).await {
+        match request_hex(elm, range, 2000).await {
             Ok(lines) => {
                 if let Some(data) = obd::parse_elm_response(range, &lines) {
                     let base = u8::from_str_radix(&range[2..4], 16).unwrap_or(0);

@@ -266,7 +266,7 @@ fn try_port(port_name: &str, report: &dyn Fn(&str)) -> Result<Elm327, Elm327Erro
 
 #[cfg(not(target_arch = "wasm32"))]
 fn try_port_baud(port_name: &str, baud: u32, report: &dyn Fn(&str)) -> Result<Elm327, Elm327Error> {
-    let mut port = serialport::new(port_name, baud)
+    let port = serialport::new(port_name, baud)
         .timeout(Duration::from_secs(3))
         .data_bits(serialport::DataBits::Eight)
         .parity(serialport::Parity::None)
@@ -275,100 +275,19 @@ fn try_port_baud(port_name: &str, baud: u32, report: &dyn Fn(&str)) -> Result<El
         .open()
         .map_err(|e| Elm327Error::Serial(format!("{port_name}: {e}")))?;
 
-    // Flush
     let _ = port.clear(serialport::ClearBuffer::All);
-    std::thread::sleep(Duration::from_millis(200));
-
-    // Send ATZ (reset)
-    write_cmd(&mut port, "ATZ")?;
-    let response = read_response(&mut port, Duration::from_secs(3))?;
-    debug!(response = ?response, "ATZ response");
-
-    let has_elm = response
-        .iter()
-        .any(|l| l.contains("ELM") || l.contains("elm"));
-    if !has_elm {
-        return Err(Elm327Error::InitFailed("No ELM response to ATZ".into()));
-    }
-
-    let elm_version = response
-        .iter()
-        .find(|l| l.contains("ELM"))
-        .cloned()
-        .unwrap_or_else(|| "ELM327 (unknown version)".to_string());
-
-    report(&format!("  Found: {elm_version}"));
-    info!(version = %elm_version, port = %port_name, baud, "ELM327 detected");
-
-    // Echo off
-    write_cmd(&mut port, "ATE0")?;
-    let _ = read_response(&mut port, Duration::from_secs(2))?;
-
-    // Linefeeds off
-    write_cmd(&mut port, "ATL0")?;
-    let _ = read_response(&mut port, Duration::from_secs(2))?;
-
-    // Spaces off (cleaner parsing)
-    write_cmd(&mut port, "ATS0")?;
-    let _ = read_response(&mut port, Duration::from_secs(2))?;
-
-    // Headers off
-    write_cmd(&mut port, "ATH0")?;
-    let _ = read_response(&mut port, Duration::from_secs(2))?;
-
-    // Auto protocol
-    write_cmd(&mut port, "ATSP0")?;
-    let _ = read_response(&mut port, Duration::from_secs(2))?;
-
-    // Trigger protocol detection with 0100
-    report("  Detecting OBD protocol...");
-    write_cmd(&mut port, "0100")?;
-    let resp_0100 = read_response(&mut port, Duration::from_secs(10))?;
-    debug!(response = ?resp_0100, "0100 response");
-
-    let has_data = resp_0100.iter().any(|l| l.starts_with("41"));
-    if !has_data {
-        let has_error = resp_0100.iter().any(|l| {
-            l.contains("UNABLE")
-                || l.contains("NO DATA")
-                || l.contains("ERROR")
-                || l.contains("BUS INIT")
-        });
-        if has_error {
-            return Err(Elm327Error::ProtocolError(
-                "Vehicle not responding. Is ignition on?".into(),
-            ));
-        }
-    }
-
-    // Get detected protocol
-    write_cmd(&mut port, "ATDPN")?;
-    let proto_resp = read_response(&mut port, Duration::from_secs(2))?;
-    let protocol = proto_resp
-        .first()
-        .map(|s| decode_protocol(s.trim()).to_string())
-        .unwrap_or_else(|| "Unknown".to_string());
-
-    report(&format!("  Protocol: {protocol}"));
-    info!(protocol = %protocol, "OBD protocol detected");
-
-    // Read voltage
-    write_cmd(&mut port, "ATRV")?;
-    let volt_resp = read_response(&mut port, Duration::from_secs(2))?;
-    let voltage = volt_resp.first().cloned();
-    if let Some(v) = &voltage {
-        info!(voltage = %v, "Battery voltage");
-    }
-
-    let info = ConnectionInfo {
-        port: port_name.to_string(),
-        baud,
-        protocol,
-        elm_version,
-        voltage,
+    let mut adapter = Elm327 {
+        port,
+        info: ConnectionInfo {
+            port: port_name.to_string(),
+            baud,
+            protocol: String::new(),
+            elm_version: String::new(),
+            voltage: None,
+        },
     };
-
-    Ok(Elm327 { port, info })
+    block_on(crate::obd_ops::init_elm(&mut adapter, report))?;
+    Ok(adapter)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
