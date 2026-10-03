@@ -16,8 +16,6 @@ struct ThemeColors {
     bar_bg: Color32,
     bar_label: Color32,
     bar_value: Color32,
-    spark_bg: Color32,
-    spark_border: Color32,
 }
 
 impl ThemeColors {
@@ -38,8 +36,6 @@ impl ThemeColors {
                 bar_bg: Color32::from_gray(40),
                 bar_label: Color32::from_gray(180),
                 bar_value: Color32::WHITE,
-                spark_bg: Color32::from_gray(20),
-                spark_border: Color32::from_gray(40),
             }
         } else {
             Self {
@@ -57,8 +53,6 @@ impl ThemeColors {
                 bar_bg: Color32::from_gray(215),
                 bar_label: Color32::from_gray(60),
                 bar_value: Color32::from_gray(20),
-                spark_bg: Color32::from_gray(235),
-                spark_border: Color32::from_gray(200),
             }
         }
     }
@@ -491,80 +485,5 @@ impl<'a> BarGauge<'a> {
                     .strong(),
             );
         });
-    }
-}
-
-/// Sparkline with gradient fill
-pub fn sparkline(ui: &mut egui::Ui, history: &[f64], width: f32, height: f32, color: Color32) {
-    if history.len() < 2 {
-        return;
-    }
-
-    let tc = ThemeColors::from_ui(ui);
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::hover());
-    let painter = ui.painter_at(rect);
-
-    // Background
-    painter.rect_filled(rect, 3.0, tc.spark_bg);
-    painter.rect_stroke(
-        rect,
-        3.0,
-        Stroke::new(0.5, tc.spark_border),
-        egui::StrokeKind::Outside,
-    );
-
-    let pad = 2.0;
-    let inner_rect = rect.shrink(pad);
-
-    let min_val = history.iter().cloned().fold(f64::INFINITY, f64::min);
-    let max_val = history.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-    let range = (max_val - min_val).max(0.001);
-
-    let points: Vec<Pos2> = history
-        .iter()
-        .enumerate()
-        .map(|(i, &v)| {
-            let x = inner_rect.min.x + (i as f32 / (history.len() - 1) as f32) * inner_rect.width();
-            let y = inner_rect.max.y - ((v - min_val) / range) as f32 * inner_rect.height();
-            Pos2::new(x, y)
-        })
-        .collect();
-
-    // Filled area under the line
-    let fill_color =
-        Color32::from_rgba_premultiplied(color.r() / 4, color.g() / 4, color.b() / 4, 60);
-    for window in points.windows(2) {
-        let mesh = egui::Mesh {
-            vertices: vec![
-                egui::epaint::Vertex {
-                    pos: window[0],
-                    uv: egui::epaint::WHITE_UV,
-                    color: fill_color,
-                },
-                egui::epaint::Vertex {
-                    pos: window[1],
-                    uv: egui::epaint::WHITE_UV,
-                    color: fill_color,
-                },
-                egui::epaint::Vertex {
-                    pos: Pos2::new(window[1].x, inner_rect.max.y),
-                    uv: egui::epaint::WHITE_UV,
-                    color: Color32::TRANSPARENT,
-                },
-                egui::epaint::Vertex {
-                    pos: Pos2::new(window[0].x, inner_rect.max.y),
-                    uv: egui::epaint::WHITE_UV,
-                    color: Color32::TRANSPARENT,
-                },
-            ],
-            indices: vec![0, 1, 2, 0, 2, 3],
-            texture_id: egui::TextureId::default(),
-        };
-        painter.add(egui::Shape::mesh(mesh));
-    }
-
-    // Line
-    for window in points.windows(2) {
-        painter.line_segment([window[0], window[1]], Stroke::new(1.5, color));
     }
 }

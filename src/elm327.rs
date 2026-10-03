@@ -11,6 +11,15 @@ pub struct ConnectionInfo {
     pub voltage: Option<String>,
 }
 
+/// Bus setup requested for a serial ELM adapter.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ElmCanMode {
+    #[default]
+    Auto,
+    /// Vauxhall/Opel Corsa D medium-speed CAN, User Protocol B at ~95.2 kbit/s.
+    CorsaDMediumSpeed,
+}
+
 #[derive(Debug)]
 pub enum Elm327Error {
     NoPortFound,
@@ -53,7 +62,7 @@ pub fn decode_protocol(s: &str) -> &'static str {
         "8" => "ISO 15765-4 CAN (11-bit, 250 kbaud)",
         "9" => "ISO 15765-4 CAN (29-bit, 250 kbaud)",
         "A" => "SAE J1939 CAN (29-bit, 250 kbaud)",
-        "B" => "USER1 CAN (11-bit, 125 kbaud)",
+        "B" => "USER1 CAN (configured bitrate)",
         "C" => "USER2 CAN (11-bit, 50 kbaud)",
         _ => "Unknown",
     }
@@ -234,6 +243,16 @@ pub fn connect(
     baud: Option<u32>,
     progress: Option<&dyn Fn(&str)>,
 ) -> Result<Elm327, Elm327Error> {
+    connect_with_mode(port_name, baud, ElmCanMode::Auto, progress)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn connect_with_mode(
+    port_name: &str,
+    baud: Option<u32>,
+    mode: ElmCanMode,
+    progress: Option<&dyn Fn(&str)>,
+) -> Result<Elm327, Elm327Error> {
     let report = |msg: &str| {
         info!("{msg}");
         if let Some(f) = progress {
@@ -243,18 +262,27 @@ pub fn connect(
 
     if let Some(baud_rate) = baud {
         report(&format!("Connecting to {port_name} at {baud_rate} baud..."));
-        try_port_baud(port_name, baud_rate, &report)
+        try_port_baud_mode(port_name, baud_rate, mode, &report)
     } else {
         report(&format!("Auto-detecting baud rate for {port_name}..."));
-        try_port(port_name, &report)
+        try_port_mode(port_name, mode, &report)
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn try_port(port_name: &str, report: &dyn Fn(&str)) -> Result<Elm327, Elm327Error> {
+    try_port_mode(port_name, ElmCanMode::Auto, report)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn try_port_mode(
+    port_name: &str,
+    mode: ElmCanMode,
+    report: &dyn Fn(&str),
+) -> Result<Elm327, Elm327Error> {
     for &baud in COMMON_BAUDS {
         report(&format!("  Trying {baud} baud..."));
-        match try_port_baud(port_name, baud, report) {
+        match try_port_baud_mode(port_name, baud, mode, report) {
             Ok(elm) => return Ok(elm),
             Err(e) => {
                 debug!(baud, error = %e, "Baud rate failed");
@@ -265,7 +293,12 @@ fn try_port(port_name: &str, report: &dyn Fn(&str)) -> Result<Elm327, Elm327Erro
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn try_port_baud(port_name: &str, baud: u32, report: &dyn Fn(&str)) -> Result<Elm327, Elm327Error> {
+fn try_port_baud_mode(
+    port_name: &str,
+    baud: u32,
+    mode: ElmCanMode,
+    report: &dyn Fn(&str),
+) -> Result<Elm327, Elm327Error> {
     let port = serialport::new(port_name, baud)
         .timeout(Duration::from_secs(3))
         .data_bits(serialport::DataBits::Eight)
@@ -286,7 +319,11 @@ fn try_port_baud(port_name: &str, baud: u32, report: &dyn Fn(&str)) -> Result<El
             voltage: None,
         },
     };
-    block_on(crate::obd_ops::init_elm(&mut adapter, report))?;
+    block_on(crate::obd_ops::init_elm_with_mode(
+        &mut adapter,
+        report,
+        mode,
+    ))?;
     Ok(adapter)
 }
 

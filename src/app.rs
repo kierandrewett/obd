@@ -1,5 +1,5 @@
 use crate::elm327::ConnectionInfo;
-use crate::gauges::{BarGauge, RadialGauge, sparkline};
+use crate::gauges::RadialGauge;
 use crate::obd::{self, DescSource, Dtc, ObdValue, PidDef};
 use egui::{self, Color32, RichText};
 use std::collections::HashMap;
@@ -81,6 +81,8 @@ pub enum OdbCmd {
     Connect {
         port: Option<String>,
         baud: Option<u32>,
+        #[cfg(not(target_arch = "wasm32"))]
+        elm_can_mode: crate::elm327::ElmCanMode,
     },
     #[cfg(not(target_arch = "wasm32"))]
     ConnectFreematicsUsb(Option<String>),
@@ -207,6 +209,8 @@ pub struct ObdApp {
     j2534_ecu_address: u8,
     #[cfg(not(target_arch = "wasm32"))]
     j2534_drivers: Vec<crate::j2534::DriverInfo>,
+    #[cfg(not(target_arch = "wasm32"))]
+    elm_can_mode: crate::elm327::ElmCanMode,
 
     // Port selection
     available_ports: Vec<String>,
@@ -226,6 +230,8 @@ pub struct ObdApp {
     pending_dtcs: Vec<Dtc>,
     dtc_status: String,
     clear_dtc_confirm: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    freematics_dtcs: [FreematicsDtcScan; 3],
 
     // Freeze frame
     freeze_data: Vec<(String, ObdValue, String)>,
@@ -235,27 +241,13 @@ pub struct ObdApp {
     vin: Option<String>,
     voltage: Option<String>,
     #[cfg(not(target_arch = "wasm32"))]
-    freematics_last_frame: Option<Instant>,
-    #[cfg(not(target_arch = "wasm32"))]
     freematics_boot_id: Option<u64>,
-    #[cfg(not(target_arch = "wasm32"))]
-    freematics_capture_utc_ms: Option<i64>,
-    #[cfg(not(target_arch = "wasm32"))]
-    freematics_capture_ms: Option<u32>,
     #[cfg(not(target_arch = "wasm32"))]
     freematics_dropped_records: u32,
     #[cfg(not(target_arch = "wasm32"))]
     freematics_reader_drops: u64,
     #[cfg(not(target_arch = "wasm32"))]
     freematics_corrupt_records: u64,
-    #[cfg(not(target_arch = "wasm32"))]
-    freematics_supply_voltage: Option<(f64, Option<u32>)>,
-    #[cfg(not(target_arch = "wasm32"))]
-    freematics_ecu_voltage: Option<(f64, Option<u32>)>,
-    #[cfg(not(target_arch = "wasm32"))]
-    freematics_latest_frame: Option<crate::freematics_usb::FreematicsFrame>,
-    #[cfg(not(target_arch = "wasm32"))]
-    freematics_support_known: bool,
 
     // UI state
     active_tab: Tab,
@@ -279,17 +271,197 @@ pub struct ObdApp {
     wake_lock: Option<std::process::Child>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct FreematicsDtcScan {
+    status: Option<u8>,
+    age_ms: Option<u32>,
+    received_at: Option<Instant>,
+    codes: Vec<Dtc>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl FreematicsDtcScan {
+    fn age_ms(&self, now: Instant) -> Option<u64> {
+        Some(
+            self.age_ms? as u64
+                + now.saturating_duration_since(self.received_at?).as_millis() as u64,
+        )
+    }
+}
+
 struct LivePidState {
     name: String,
     value: ObdValue,
     unit: String,
     numeric_value: f64,
-    history: Vec<f64>,
+    history: Vec<HistoryPoint>,
     raw: String,
     age_ms: Option<u32>,
     supported: Option<bool>,
     received_at: Instant,
     capture_ms: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct HistoryPoint {
+    captured_at: Instant,
+    value: f64,
+}
+
+fn show_time_series(
+    ui: &mut egui::Ui,
+    label: &str,
+    state: &LivePidState,
+    color: Color32,
+    unit: &str,
+    minimum_range: f64,
+    freshness: Duration,
+    max_gap: Duration,
+) {
+    let now = Instant::now();
+    let window = Duration::from_secs(60);
+    let start = now - window;
+    let samples: Vec<_> = state
+        .history
+        .iter()
+        .copied()
+        .filter(|point| point.captured_at >= start && point.captured_at <= now)
+        .collect();
+    let age = state
+        .age_ms
+        .map(|age| Duration::from_millis(age as u64))
+        .unwrap_or_default()
+        .saturating_add(state.received_at.elapsed());
+
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(label).strong());
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(
+                RichText::new(format!("{:.0} {unit}", state.numeric_value))
+                    .monospace()
+                    .color(color),
+            );
+            ui.label(
+                RichText::new(if age > freshness {
+                    format!("Stale · {} ms", age.as_millis())
+                } else {
+                    format!("{} ms", age.as_millis())
+                })
+                .small()
+                .color(if age > freshness {
+                    Color32::from_rgb(220, 170, 80)
+                } else {
+                    ui.visuals().weak_text_color()
+                }),
+            );
+        });
+    });
+
+    let width = ui.available_width().max(180.0);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 156.0), egui::Sense::hover());
+    let painter = ui.painter_at(rect);
+    let bg = ui.visuals().extreme_bg_color;
+    let grid = ui.visuals().widgets.noninteractive.bg_stroke.color;
+    let muted = ui.visuals().weak_text_color();
+    painter.rect_filled(rect, 2.0, bg);
+
+    let plot = rect.shrink2(egui::vec2(42.0, 18.0));
+    let values: Vec<_> = samples.iter().map(|point| point.value).collect();
+    let (mut min, mut max) = if values.is_empty() {
+        (0.0, minimum_range)
+    } else {
+        (
+            values.iter().copied().fold(f64::INFINITY, f64::min),
+            values.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+        )
+    };
+    let observed_range = max - min;
+    if observed_range < minimum_range {
+        let center = (min + max) / 2.0;
+        min = center - minimum_range / 2.0;
+        max = center + minimum_range / 2.0;
+    }
+    let padding = (max - min) * 0.08;
+    min -= padding;
+    max += padding;
+
+    for fraction in [0.0_f32, 0.5, 1.0] {
+        let y = egui::lerp(plot.bottom()..=plot.top(), fraction);
+        painter.line_segment(
+            [egui::pos2(plot.left(), y), egui::pos2(plot.right(), y)],
+            egui::Stroke::new(0.5, grid),
+        );
+        let value = min + (max - min) * fraction as f64;
+        painter.text(
+            egui::pos2(rect.left() + 2.0, y),
+            egui::Align2::LEFT_CENTER,
+            format!("{value:.0}"),
+            egui::FontId::monospace(9.0),
+            muted,
+        );
+    }
+    painter.text(
+        egui::pos2(plot.left(), rect.bottom() - 1.0),
+        egui::Align2::LEFT_BOTTOM,
+        "60s",
+        egui::FontId::monospace(9.0),
+        muted,
+    );
+    painter.text(
+        egui::pos2(plot.right(), rect.bottom() - 1.0),
+        egui::Align2::RIGHT_BOTTOM,
+        "now",
+        egui::FontId::monospace(9.0),
+        muted,
+    );
+
+    let position = |point: HistoryPoint| {
+        let elapsed = now.duration_since(point.captured_at).as_secs_f64();
+        let x_fraction = (1.0 - elapsed / window.as_secs_f64()).clamp(0.0, 1.0) as f32;
+        let y_fraction = ((point.value - min) / (max - min)).clamp(0.0, 1.0) as f32;
+        egui::pos2(
+            egui::lerp(plot.left()..=plot.right(), x_fraction),
+            egui::lerp(plot.bottom()..=plot.top(), y_fraction),
+        )
+    };
+    for pair in samples.windows(2) {
+        if pair[1].captured_at.duration_since(pair[0].captured_at) <= max_gap {
+            painter.line_segment(
+                [position(pair[0]), position(pair[1])],
+                egui::Stroke::new(2.0, color),
+            );
+        }
+    }
+
+    if samples.len() < 2 {
+        painter.text(
+            plot.center(),
+            egui::Align2::CENTER_CENTER,
+            "Waiting for fresh samples",
+            egui::FontId::proportional(11.0),
+            muted,
+        );
+    }
+
+    if let Some(pointer) = response.hover_pos()
+        && plot.contains(pointer)
+        && !samples.is_empty()
+    {
+        let nearest = samples
+            .iter()
+            .min_by(|a, b| {
+                (position(**a).x - pointer.x)
+                    .abs()
+                    .total_cmp(&(position(**b).x - pointer.x).abs())
+            })
+            .expect("samples was checked as non-empty");
+        response.on_hover_text(format!(
+            "{:.1} {unit} · captured {:.2}s ago",
+            nearest.value,
+            now.duration_since(nearest.captured_at).as_secs_f32()
+        ));
+    }
 }
 
 impl ObdApp {
@@ -357,6 +529,8 @@ impl ObdApp {
             j2534_ecu_address: 0x10,
             #[cfg(not(target_arch = "wasm32"))]
             j2534_drivers: crate::j2534::discover_drivers(),
+            #[cfg(not(target_arch = "wasm32"))]
+            elm_can_mode: crate::elm327::ElmCanMode::Auto,
             available_ports,
             selected_port: None,
             selected_baud: None,
@@ -369,32 +543,21 @@ impl ObdApp {
             pending_dtcs: Vec::new(),
             dtc_status: String::new(),
             clear_dtc_confirm: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            freematics_dtcs: std::array::from_fn(|_| FreematicsDtcScan::default()),
             freeze_data: Vec::new(),
             freeze_frame_read: false,
             vin: None,
             voltage: None,
             #[cfg(not(target_arch = "wasm32"))]
-            freematics_last_frame: None,
             #[cfg(not(target_arch = "wasm32"))]
             freematics_boot_id: None,
-            #[cfg(not(target_arch = "wasm32"))]
-            freematics_capture_utc_ms: None,
-            #[cfg(not(target_arch = "wasm32"))]
-            freematics_capture_ms: None,
             #[cfg(not(target_arch = "wasm32"))]
             freematics_dropped_records: 0,
             #[cfg(not(target_arch = "wasm32"))]
             freematics_reader_drops: 0,
             #[cfg(not(target_arch = "wasm32"))]
             freematics_corrupt_records: 0,
-            #[cfg(not(target_arch = "wasm32"))]
-            freematics_supply_voltage: None,
-            #[cfg(not(target_arch = "wasm32"))]
-            freematics_ecu_voltage: None,
-            #[cfg(not(target_arch = "wasm32"))]
-            freematics_latest_frame: None,
-            #[cfg(not(target_arch = "wasm32"))]
-            freematics_support_known: false,
             active_tab: Tab::Dashboard,
             log_messages: Vec::new(),
             log_auto_scroll: true,
@@ -425,17 +588,12 @@ impl ObdApp {
                         self.supported_pids.clear();
                         #[cfg(not(target_arch = "wasm32"))]
                         {
-                            self.freematics_last_frame = None;
                             self.freematics_boot_id = None;
-                            self.freematics_capture_utc_ms = None;
-                            self.freematics_capture_ms = None;
                             self.freematics_dropped_records = 0;
                             self.freematics_reader_drops = 0;
                             self.freematics_corrupt_records = 0;
-                            self.freematics_supply_voltage = None;
-                            self.freematics_ecu_voltage = None;
-                            self.freematics_latest_frame = None;
-                            self.freematics_support_known = false;
+                            self.freematics_dtcs =
+                                std::array::from_fn(|_| FreematicsDtcScan::default());
                         }
                         self.stored_dtcs.clear();
                         self.pending_dtcs.clear();
@@ -478,11 +636,6 @@ impl ObdApp {
                     self.live_running = false;
                     self.connection_info = None;
                     self.connection_status = "Disconnected".to_string();
-                    #[cfg(not(target_arch = "wasm32"))]
-                    {
-                        self.freematics_last_frame = None;
-                        self.freematics_latest_frame = None;
-                    }
                     self.release_wake_lock();
                     self.add_log("[DISCONNECTED]");
                 }
@@ -493,6 +646,7 @@ impl ObdApp {
                     unit,
                     raw,
                 } => {
+                    let received_at = Instant::now();
                     let numeric = match &value {
                         ObdValue::Numeric(v) => *v,
                         _ => 0.0,
@@ -533,10 +687,13 @@ impl ObdApp {
                     state.unit = unit;
                     state.numeric_value = numeric;
                     state.raw = raw;
-                    state.history.push(numeric);
+                    state.history.push(HistoryPoint {
+                        captured_at: received_at,
+                        value: numeric,
+                    });
                     state.age_ms = None;
                     state.supported = None;
-                    state.received_at = Instant::now();
+                    state.received_at = received_at;
                     state.capture_ms = None;
                     if state.history.len() > 300 {
                         state.history.remove(0);
@@ -618,24 +775,53 @@ impl ObdApp {
                 frame.boot_id
             ));
             self.live_data.clear();
+            self.freematics_dtcs = std::array::from_fn(|_| FreematicsDtcScan::default());
         }
         let previous_device_drops = self.freematics_dropped_records;
         let previous_reader_drops = self.freematics_reader_drops;
         let previous_corrupt_records = self.freematics_corrupt_records;
         self.freematics_boot_id = Some(frame.boot_id);
-        self.freematics_last_frame = Some(received_at);
-        self.freematics_capture_utc_ms = frame.capture_utc_ms;
-        self.freematics_capture_ms = Some(frame.capture_ms);
         self.freematics_dropped_records = frame.dropped_records;
         self.freematics_reader_drops = frame.reader_drops;
-        self.freematics_support_known = frame.supported_pids.is_some();
         self.supported_pids = frame
             .supported_pids
             .as_ref()
             .map(|pids| pids.iter().copied().collect())
             .unwrap_or_default();
-        self.freematics_supply_voltage = frame.model_b_supply_voltage();
-        self.freematics_ecu_voltage = frame.ecu_control_module_voltage();
+
+        if let Some(vin) = frame.vin.as_ref() {
+            self.vin = Some(vin.clone());
+        }
+        for (index, scan) in frame.dtc_scans().into_iter().enumerate() {
+            let status = match scan.status {
+                Some(crate::freematics_usb::FreematicsDtcStatus::NoResponse) => Some(0),
+                Some(crate::freematics_usb::FreematicsDtcStatus::Response) => Some(1),
+                Some(crate::freematics_usb::FreematicsDtcStatus::Codes) => Some(2),
+                None => None,
+            };
+            let codes = if scan.status == Some(crate::freematics_usb::FreematicsDtcStatus::Codes) {
+                scan.code_slots
+                    .iter()
+                    .take(scan.count.unwrap_or(0) as usize)
+                    .flatten()
+                    .copied()
+                    .filter(|raw| *raw != 0)
+                    .map(|raw| Dtc {
+                        code: obd::decode_dtc_bytes((raw >> 8) as u8, raw as u8),
+                        description: String::new(),
+                        desc_source: DescSource::NotFound,
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            self.freematics_dtcs[index] = FreematicsDtcScan {
+                status,
+                age_ms: scan.age_ms,
+                received_at: scan.age_ms.map(|_| received_at),
+                codes,
+            };
+        }
 
         for measurement in frame.measurements() {
             let key = measurement.cmd;
@@ -676,7 +862,14 @@ impl ObdApp {
             let new_capture = state.capture_ms != Some(frame.capture_ms);
             state.capture_ms = Some(frame.capture_ms);
             if new_capture && age_ms.is_some_and(|age| age <= age_limit) {
-                state.history.push(numeric);
+                if let Some(captured_at) = age_ms
+                    .and_then(|age| received_at.checked_sub(Duration::from_millis(age as u64)))
+                {
+                    state.history.push(HistoryPoint {
+                        captured_at,
+                        value: numeric,
+                    });
+                }
                 if state.history.len() > 300 {
                     state.history.remove(0);
                 }
@@ -701,7 +894,6 @@ impl ObdApp {
                 frame.reader_drops
             ));
         }
-        self.freematics_latest_frame = Some(frame);
     }
 
     fn add_log(&mut self, msg: &str) {
@@ -783,35 +975,18 @@ impl ObdApp {
             let age = Self::displayed_age_ms(state);
             let text = match age {
                 Some(age) if !self.pid_is_stale(pid, state) => format!("Freshness age: {age} ms"),
-                Some(age) => format!("STALE reading · acquisition age {age} ms"),
-                None => "STALE reading · acquisition age unavailable".to_string(),
+                Some(age) => format!("Out-of-date reading · acquisition age {age} ms"),
+                None => "Out-of-date reading · acquisition age unavailable".to_string(),
             };
             ui.colored_label(
                 if self.pid_is_stale(pid, state) {
-                    Color32::from_rgb(240, 100, 80)
+                    Color32::from_rgb(220, 170, 80)
                 } else {
                     Color32::from_gray(130)
                 },
                 RichText::new(text).small(),
             );
         }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn mark_capture_event(&mut self, kind: &str) {
-        let host_utc = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ");
-        let device_utc = self
-            .freematics_capture_utc_ms
-            .and_then(chrono::DateTime::<chrono::Utc>::from_timestamp_millis)
-            .map(|time| time.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
-            .unwrap_or_else(|| "invalid".to_string());
-        let device_age_ms = self
-            .freematics_last_frame
-            .map(|received| received.elapsed().as_millis());
-        self.add_log(&format!(
-            "[MARKER] kind={kind} laptop_utc={host_utc} device_capture_utc={device_utc} device_capture_ms={:?} device_frame_age_ms={device_age_ms:?}",
-            self.freematics_capture_ms
-        ));
     }
 
     fn show_engine_warning(&self, ui: &mut egui::Ui) {
@@ -854,6 +1029,8 @@ impl ObdApp {
         self.send_cmd(OdbCmd::Connect {
             port: self.selected_port.clone(),
             baud: self.selected_baud,
+            #[cfg(not(target_arch = "wasm32"))]
+            elm_can_mode: self.elm_can_mode,
         });
     }
 
@@ -889,6 +1066,27 @@ impl ObdApp {
                         "J2534 pass-through",
                     );
                 });
+            if self.connection_kind == ConnectionKind::Serial {
+                egui::ComboBox::from_id_salt(ui.id().with("can_mode"))
+                    .selected_text(match self.elm_can_mode {
+                        crate::elm327::ElmCanMode::Auto => "Automatic OBD / HS-CAN",
+                        crate::elm327::ElmCanMode::CorsaDMediumSpeed => {
+                            "Corsa D MS-CAN · experimental"
+                        }
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut self.elm_can_mode,
+                            crate::elm327::ElmCanMode::Auto,
+                            "Automatic OBD / HS-CAN (default)",
+                        );
+                        ui.selectable_value(
+                            &mut self.elm_can_mode,
+                            crate::elm327::ElmCanMode::CorsaDMediumSpeed,
+                            "Corsa D MS-CAN · 95.2 kbit/s",
+                        );
+                    });
+            }
             match self.connection_kind {
                 ConnectionKind::Tcp => {
                     ui.add(
@@ -987,7 +1185,12 @@ impl ObdApp {
             } else {
                 (Color32::from_rgb(180, 50, 50), "Disconnected")
             };
-            ui.colored_label(status_color, RichText::new(status_text).strong());
+            ui.colored_label(status_color, "●");
+            ui.label(
+                RichText::new(status_text)
+                    .strong()
+                    .color(Color32::from_gray(190)),
+            );
             ui.separator();
 
             if self.connected {
@@ -1008,80 +1211,6 @@ impl ObdApp {
                 if let Some(v) = &self.voltage {
                     ui.separator();
                     ui.label(RichText::new(v.to_string()).color(Color32::from_rgb(80, 160, 220)));
-                }
-                #[cfg(not(target_arch = "wasm32"))]
-                if self.is_freematics_usb() {
-                    let frame_age = self
-                        .freematics_last_frame
-                        .map(|at| at.elapsed().as_millis());
-                    ui.separator();
-                    match frame_age {
-                        Some(age) if age <= 1500 => {
-                            ui.colored_label(
-                                Color32::from_rgb(80, 200, 120),
-                                format!("Telemetry live · frame age {age} ms"),
-                            );
-                        }
-                        Some(age) => {
-                            ui.colored_label(
-                                Color32::from_rgb(240, 100, 80),
-                                format!("Telemetry stale · last frame {age} ms ago"),
-                            );
-                        }
-                        None => {
-                            ui.colored_label(
-                                Color32::from_rgb(220, 180, 50),
-                                "Waiting for Freematics telemetry…",
-                            );
-                        }
-                    }
-                    if let Some(capture_ms) = self.freematics_capture_ms {
-                        let capture = self
-                            .freematics_capture_utc_ms
-                            .and_then(chrono::DateTime::<chrono::Utc>::from_timestamp_millis)
-                            .map(|utc| utc.format("%Y-%m-%d %H:%M:%S%.3f UTC").to_string())
-                            .unwrap_or_else(|| "UTC invalid".to_string());
-                        ui.label(
-                            RichText::new(format!("Capture {capture} · device +{capture_ms} ms"))
-                                .small()
-                                .color(Color32::from_gray(150)),
-                        );
-                    }
-                    if let Some((voltage, age)) = self.freematics_supply_voltage {
-                        let displayed_age =
-                            age.map(|ms| ms as u128 + frame_age.unwrap_or_default());
-                        let age_text = displayed_age
-                            .map(|ms| format!(" · age {ms} ms"))
-                            .unwrap_or_default();
-                        ui.separator();
-                        ui.label(
-                            RichText::new(format!("Model B supply {voltage:.2} V{age_text}"))
-                                .color(Color32::from_rgb(80, 160, 220)),
-                        );
-                    }
-                    if let Some((voltage, age)) = self.freematics_ecu_voltage {
-                        let displayed_age =
-                            age.map(|ms| ms as u128 + frame_age.unwrap_or_default());
-                        let age_text = displayed_age
-                            .map(|ms| format!(" · age {ms} ms"))
-                            .unwrap_or_else(|| " · age unavailable".to_string());
-                        ui.separator();
-                        ui.label(
-                            RichText::new(format!(
-                                "ECU control-module voltage {voltage:.2} V{age_text}"
-                            ))
-                            .color(Color32::from_rgb(170, 150, 220)),
-                        );
-                    }
-                    if self.freematics_dropped_records > 0 || self.freematics_reader_drops > 0 {
-                        ui.colored_label(
-                            Color32::from_rgb(240, 170, 70),
-                            format!(
-                                "USB drops: device {}, dashboard {}",
-                                self.freematics_dropped_records, self.freematics_reader_drops
-                            ),
-                        );
-                    }
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("Disconnect").clicked() {
@@ -1416,29 +1545,7 @@ impl ObdApp {
             return;
         }
 
-        if freematics_usb {
-            ui.label(
-                RichText::new(
-                    "Freematics passive stream is active; ECU polling is owned by the device.",
-                )
-                .color(Color32::from_rgb(100, 190, 220)),
-            );
-            #[cfg(not(target_arch = "wasm32"))]
-            ui.horizontal_wrapped(|ui| {
-                if ui.button("Mark shudder").clicked() {
-                    self.mark_capture_event("SHUDDER");
-                }
-                if ui.button("A/C ON").clicked() {
-                    self.mark_capture_event("AC_ON");
-                }
-                if ui.button("A/C OFF").clicked() {
-                    self.mark_capture_event("AC_OFF");
-                }
-                if ui.button("Electrical load changed").clicked() {
-                    self.mark_capture_event("ELECTRICAL_LOAD_CHANGE");
-                }
-            });
-        } else {
+        if !freematics_usb {
             // Controls bar when running
             ui.horizontal(|ui| {
                 if ui
@@ -1606,91 +1713,96 @@ impl ObdApp {
             ui.separator();
             ui.add_space(4.0);
 
-            // ── Bottom section: two columns ─────────────────────────────
-            // Left: bar gauges   Right: sparklines
+            ui.separator();
+            ui.label(RichText::new("Trends · last 60 seconds").strong());
+            if let Some(state) = self.live_data.get("010C") {
+                show_time_series(
+                    ui,
+                    "Engine RPM",
+                    state,
+                    Color32::from_rgb(220, 115, 95),
+                    "rpm",
+                    180.0,
+                    Duration::from_millis(250),
+                    Duration::from_secs(1),
+                );
+            }
             ui.columns(2, |cols| {
-                // ── Left: bar gauges ────────────────────────────────────
-                cols[0].vertical(|ui| {
-                    ui.label(
-                        RichText::new("Sensors")
-                            .size(13.0)
-                            .color(Color32::from_gray(160)),
-                    );
-                    ui.add_space(4.0);
-
-                    let bar_w = (ui.available_width() - 130.0).max(80.0);
-
-                    let bar_pids: &[(&str, &str, f64, f64, &str)] = &[
-                        ("012F", "Fuel Level", 0.0, 100.0, "%"),
-                        ("0142", "ECU Control Module V", 0.0, 18.0, "V"),
-                        ("010F", "Intake Temp", -40.0, 215.0, "\u{00B0}C"),
-                        ("0110", "MAF", 0.0, 655.35, "g/s"),
-                        ("010B", "Intake kPa", 0.0, 255.0, "kPa"),
-                        ("010E", "Timing", -64.0, 63.5, "\u{00B0}"),
-                        ("0106", "STFT B1", -100.0, 99.2, "%"),
-                        ("0107", "LTFT B1", -100.0, 99.2, "%"),
-                        ("0133", "Baro", 0.0, 255.0, "kPa"),
-                        ("0146", "Ambient", -40.0, 215.0, "\u{00B0}C"),
-                        ("012C", "EGR", 0.0, 100.0, "%"),
-                        ("012E", "Evap", 0.0, 100.0, "%"),
-                        ("0149", "Accel Pos", 0.0, 100.0, "%"),
-                        ("0144", "Equiv \u{03BB}", 0.0, 2.0, "\u{03BB}"),
-                    ];
-
-                    for &(cmd, label, min, max, unit) in bar_pids {
-                        if let Some(state) = self.live_data.get(cmd) {
-                            BarGauge::new(label, state.numeric_value, min, max, unit)
-                                .width(bar_w)
-                                .decimals(1)
-                                .show(ui);
-                        }
+                let charts = [
+                    (
+                        "010D",
+                        "Road speed",
+                        Color32::from_rgb(85, 165, 225),
+                        "km/h",
+                        8.0,
+                        1.0,
+                        3.0,
+                    ),
+                    (
+                        "0105",
+                        "Coolant temperature",
+                        Color32::from_rgb(225, 180, 65),
+                        "°C",
+                        15.0,
+                        1.0,
+                        4.0,
+                    ),
+                    (
+                        "0111",
+                        "Throttle position",
+                        Color32::from_rgb(75, 190, 125),
+                        "%",
+                        10.0,
+                        1.0,
+                        4.0,
+                    ),
+                    (
+                        "0104",
+                        "Calculated engine load",
+                        Color32::from_rgb(175, 125, 220),
+                        "%",
+                        10.0,
+                        1.0,
+                        4.0,
+                    ),
+                    (
+                        "0142",
+                        "ECU control-module voltage",
+                        Color32::from_rgb(80, 195, 195),
+                        "V",
+                        1.0,
+                        1.0,
+                        4.0,
+                    ),
+                    (
+                        "012F",
+                        "Fuel level",
+                        Color32::from_rgb(205, 135, 185),
+                        "%",
+                        10.0,
+                        1.0,
+                        4.0,
+                    ),
+                ];
+                for (index, (pid, label, color, unit, min_range, freshness_s, max_gap_s)) in
+                    charts.into_iter().enumerate()
+                {
+                    if let Some(state) = self.live_data.get(pid) {
+                        cols[index % 2].vertical(|ui| {
+                            show_time_series(
+                                ui,
+                                label,
+                                state,
+                                color,
+                                unit,
+                                min_range,
+                                Duration::from_secs_f64(freshness_s),
+                                Duration::from_secs_f64(max_gap_s),
+                            );
+                            ui.add_space(8.0);
+                        });
                     }
-                });
-
-                // ── Right: sparkline trends ─────────────────────────────
-                cols[1].vertical(|ui| {
-                    ui.label(
-                        RichText::new("Trends")
-                            .size(13.0)
-                            .color(Color32::from_gray(160)),
-                    );
-                    ui.add_space(4.0);
-
-                    let spark_w = (ui.available_width() - 60.0).max(100.0);
-
-                    let sparkline_pids: &[(&str, &str, Color32)] = &[
-                        ("010C", "RPM", Color32::from_rgb(220, 100, 100)),
-                        ("010D", "Speed", Color32::from_rgb(80, 160, 220)),
-                        ("0105", "Coolant", Color32::from_rgb(220, 180, 50)),
-                        ("0111", "Throttle", Color32::from_rgb(50, 200, 80)),
-                        ("0104", "Load", Color32::from_rgb(180, 120, 220)),
-                        ("012F", "Fuel", Color32::from_rgb(100, 200, 200)),
-                    ];
-
-                    for &(cmd, label, color) in sparkline_pids {
-                        if let Some(state) = self.live_data.get(cmd) {
-                            if state.history.len() >= 2 {
-                                ui.horizontal(|ui| {
-                                    ui.label(
-                                        RichText::new(format!("{label:>8}"))
-                                            .monospace()
-                                            .color(color)
-                                            .size(11.0),
-                                    );
-                                    sparkline(ui, &state.history, spark_w, 28.0, color);
-                                    // Current value next to sparkline
-                                    ui.label(
-                                        RichText::new(format!("{:.0}", state.numeric_value))
-                                            .monospace()
-                                            .color(Color32::from_gray(180))
-                                            .size(11.0),
-                                    );
-                                });
-                                ui.add_space(2.0);
-                            }
-                        }
-                    }
-                });
+                }
             });
         });
     }
@@ -1704,7 +1816,7 @@ impl ObdApp {
         }
 
         if self.is_freematics_usb() {
-            ui.label("Passive telemetry only — polling and PID queries are not sent over this connection.");
+            ui.label("This connection is read-only; active diagnostic requests are unavailable.");
         } else {
             ui.horizontal(|ui| {
                 if self.live_running {
@@ -1797,7 +1909,7 @@ impl ObdApp {
                                 };
                                 ui.colored_label(
                                     if stale {
-                                        Color32::from_rgb(240, 100, 80)
+                                        Color32::from_rgb(220, 170, 80)
                                     } else {
                                         Color32::from_gray(150)
                                     },
@@ -1806,72 +1918,8 @@ impl ObdApp {
                             });
                         });
                     }
-                    if self.is_freematics_usb() {
-                        for definition in &self.pid_defs {
-                            if self.live_data.contains_key(definition.cmd) {
-                                continue;
-                            }
-                            let supported = definition
-                                .cmd
-                                .get(2..)
-                                .and_then(|pid| u8::from_str_radix(pid, 16).ok())
-                                .map(|pid| self.supported_pids.contains(&pid));
-                            let status = match (self.freematics_support_known, supported) {
-                                (true, Some(true)) => "supported · no sample yet",
-                                (true, Some(false)) => "unsupported",
-                                _ => "support unknown",
-                            };
-                            body.row(18.0, |mut row| {
-                                row.col(|ui| {
-                                    ui.label(
-                                        RichText::new(definition.cmd)
-                                            .monospace()
-                                            .color(Color32::from_rgb(80, 160, 220)),
-                                    );
-                                });
-                                row.col(|ui| {
-                                    ui.label(definition.description);
-                                });
-                                row.col(|ui| {
-                                    ui.label("—");
-                                });
-                                row.col(|ui| {
-                                    ui.label(format!("{:?}", definition.unit));
-                                });
-                                row.col(|ui| {
-                                    ui.label("—");
-                                });
-                                row.col(|ui| {
-                                    ui.colored_label(Color32::from_gray(130), status);
-                                });
-                            });
-                        }
-                    }
                 });
         });
-        #[cfg(not(target_arch = "wasm32"))]
-        if self.is_freematics_usb() {
-            if let Some(frame) = &self.freematics_latest_frame {
-                let waveform_ids = [
-                    0x020, 0x021, 0x023, 0x024, 0x094, 0x095, 0x09C, 0x09D, 0x0A0, 0x0A1, 0x0A2,
-                ];
-                let waveforms: Vec<_> = frame
-                    .fields
-                    .iter()
-                    .filter(|field| waveform_ids.contains(&field.pid))
-                    .collect();
-                if !waveforms.is_empty() {
-                    ui.separator();
-                    ui.label(
-                        RichText::new("Captured waveform / device fields (raw, source order)")
-                            .strong(),
-                    );
-                    for field in waveforms {
-                        ui.monospace(format!("PID 0x{:03X}: {:?}", field.pid, field.values));
-                    }
-                }
-            }
-        }
     }
 
     fn show_dtcs(&mut self, ui: &mut egui::Ui) {
@@ -1883,7 +1931,73 @@ impl ObdApp {
         }
 
         if self.is_freematics_usb() {
-            ui.label(RichText::new("DTC reads and clearing are unavailable on passive Freematics USB; no diagnostic request was sent.").color(Color32::from_rgb(220, 180, 50)));
+            ui.label(
+                RichText::new("Device-reported scan results · read-only")
+                    .color(Color32::from_gray(150)),
+            );
+            ui.label(
+                RichText::new(
+                    "The firmware scans DTCs periodically. This USB adapter cannot trigger a scan or clear codes.",
+                )
+                .color(Color32::from_gray(125)),
+            );
+            ui.add_space(10.0);
+            let now = Instant::now();
+            let sections = [
+                ("Stored", &self.freematics_dtcs[0]),
+                ("Pending", &self.freematics_dtcs[1]),
+                ("Permanent", &self.freematics_dtcs[2]),
+            ];
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                for (label, scan) in sections {
+                    ui.heading(label);
+                    let Some(age_ms) = scan.age_ms(now) else {
+                        ui.label(
+                            RichText::new("No completed scan reported yet")
+                                .color(Color32::from_gray(125)),
+                        );
+                        ui.add_space(8.0);
+                        continue;
+                    };
+                    let stale = age_ms > 120_000;
+                    let age_text = if age_ms < 1_000 {
+                        format!("{} ms ago", age_ms)
+                    } else {
+                        format!("{:.1} s ago", age_ms as f64 / 1_000.0)
+                    };
+                    let status_text = match scan.status {
+                        Some(0) => "No response from ECU",
+                        Some(1) => "ECU responded · no codes reported",
+                        Some(2) if scan.codes.is_empty() => {
+                            "ECU reported codes, but no valid code slots were present"
+                        }
+                        Some(2) => "ECU reported codes",
+                        _ => "Unknown scan status",
+                    };
+                    ui.horizontal(|ui| {
+                        ui.label(status_text);
+                        ui.label(
+                            RichText::new(format!("Last scan {age_text}")).color(if stale {
+                                Color32::from_rgb(235, 165, 55)
+                            } else {
+                                Color32::from_gray(145)
+                            }),
+                        );
+                    });
+                    if stale {
+                        ui.label(
+                            RichText::new(
+                                "Scan is old; results may no longer reflect current ECU state",
+                            )
+                            .color(Color32::from_rgb(235, 165, 55)),
+                        );
+                    }
+                    for dtc in &scan.codes {
+                        ui.monospace(&dtc.code);
+                    }
+                    ui.add_space(12.0);
+                }
+            });
             return;
         }
 
@@ -1893,6 +2007,19 @@ impl ObdApp {
                     make: self.vehicle_make(),
                 });
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            if self.elm_can_mode == crate::elm327::ElmCanMode::CorsaDMediumSpeed {
+                ui.label(
+                    RichText::new("Clear disabled for experimental MS-CAN")
+                        .color(Color32::from_gray(130)),
+                );
+            } else if ui
+                .button(RichText::new("Clear DTCs").color(Color32::from_rgb(220, 50, 50)))
+                .clicked()
+            {
+                self.clear_dtc_confirm = true;
+            }
+            #[cfg(target_arch = "wasm32")]
             if ui
                 .button(RichText::new("Clear DTCs").color(Color32::from_rgb(220, 50, 50)))
                 .clicked()
@@ -2021,7 +2148,10 @@ impl ObdApp {
         }
 
         if self.is_freematics_usb() {
-            ui.label(RichText::new("Freeze-frame reads are unavailable on passive Freematics USB; no diagnostic request was sent.").color(Color32::from_rgb(220, 180, 50)));
+            ui.label(
+                RichText::new("Freeze-frame requests are unavailable on this connection.")
+                    .color(Color32::from_gray(150)),
+            );
             return;
         }
 
@@ -2097,8 +2227,15 @@ impl ObdApp {
         }
 
         if self.is_freematics_usb() {
-            ui.label("VIN and diagnostic requests are unavailable over the passive Freematics USB stream.");
+            ui.label("VIN and supported Mode 01 PIDs are shown when reported by the device; active queries are unavailable.");
         } else {
+            #[cfg(not(target_arch = "wasm32"))]
+            if self.elm_can_mode == crate::elm327::ElmCanMode::CorsaDMediumSpeed {
+                ui.label(
+                    RichText::new("Experimental bus setup only: standard OBD requests remain read-only; Opel module-specific addressing and decoding are not implemented.")
+                        .color(Color32::from_rgb(220, 180, 80)),
+                );
+            }
             ui.horizontal(|ui| {
                 if ui.button("Read VIN").clicked() {
                     self.send_cmd(OdbCmd::ReadVin);
@@ -2157,6 +2294,16 @@ impl ObdApp {
                     if let Some(v) = &self.voltage {
                         ui.label(RichText::new("Adapter-reported Voltage:").strong());
                         ui.label(v);
+                        ui.end_row();
+                    }
+
+                    if self.is_freematics_usb() {
+                        ui.label(RichText::new("Device-reported supported Mode 01 PIDs:").strong());
+                        ui.label(if self.supported_pids.is_empty() {
+                            "Not reported yet".to_string()
+                        } else {
+                            format!("{}", self.supported_pids.len())
+                        });
                         ui.end_row();
                     }
                 });
@@ -2384,13 +2531,32 @@ fn is_usb_serial_port_name(port: &str) -> bool {
         || port.to_ascii_uppercase().starts_with("COM")
 }
 
+fn should_request_live_repaint(
+    live_running: bool,
+    connecting: bool,
+    passive_telemetry_connected: bool,
+) -> Option<Duration> {
+    (live_running || connecting || passive_telemetry_connected)
+        .then_some(Duration::from_millis(100))
+}
+
 impl eframe::App for ObdApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.process_events();
 
-        // Request repaint while live data is running
-        if self.live_running || self.connecting {
-            ctx.request_repaint_after(Duration::from_millis(100));
+        // Freematics is a passive stream, so live_running stays false; keep
+        // repainting while connected so queued telemetry is applied without
+        // requiring mouse/keyboard input.
+        #[cfg(not(target_arch = "wasm32"))]
+        let passive_telemetry_connected = self.is_freematics_usb() && self.connected;
+        #[cfg(target_arch = "wasm32")]
+        let passive_telemetry_connected = false;
+        if let Some(interval) = should_request_live_repaint(
+            self.live_running,
+            self.connecting,
+            passive_telemetry_connected,
+        ) {
+            ctx.request_repaint_after(interval);
         }
 
         // Dark theme
@@ -2474,6 +2640,86 @@ impl eframe::App for ObdApp {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod adapter_ui_tests {
     use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn connected_freematics_stream_schedules_ui_repaints_without_diagnostic_polling() {
+        assert_eq!(
+            should_request_live_repaint(false, false, true),
+            Some(Duration::from_millis(100))
+        );
+        assert_eq!(should_request_live_repaint(false, false, false), None);
+    }
+
+    #[test]
+    fn freematics_cached_dtc_vin_and_supported_pids_are_passive() {
+        let (commands, command_rx) = mpsc::channel();
+        let (_events, event_rx) = mpsc::channel();
+        let (_telemetry_tx, telemetry_rx) = mpsc::channel();
+        let mut app = ObdApp::new_state(commands, event_rx, telemetry_rx, None);
+        app.connection_kind = ConnectionKind::FreematicsUsb;
+        app.connected = true;
+        let fields = [
+            (0x300, 1.0),
+            (0x301, 0x0134 as f64),
+            (0x310, 2.0),
+            (0x360, 500.0),
+            (0x320, 0.0),
+            (0x330, 1.0),
+            (0x361, 500.0),
+            (0x340, 0.0),
+            (0x350, 1.0),
+            (0x362, 500.0),
+        ]
+        .into_iter()
+        .map(|(pid, value)| crate::freematics_usb::TelemetryField {
+            pid,
+            values: vec![value],
+        })
+        .collect();
+        let frame = crate::freematics_usb::FreematicsFrame {
+            boot_id: 7,
+            capture_ms: 1_250,
+            capture_utc_ms: None,
+            dropped_records: 0,
+            supported_pids: Some(HashSet::from([0x0C, 0x0D])),
+            vin: Some("1HGCM82633A004352".into()),
+            fields,
+            corrupt_records: 0,
+            reader_drops: 0,
+        };
+
+        app.apply_freematics_frame(frame);
+        assert_eq!(app.vin.as_deref(), Some("1HGCM82633A004352"));
+        assert_eq!(
+            app.supported_pids.iter().copied().collect::<HashSet<_>>(),
+            HashSet::from([0x0C, 0x0D])
+        );
+        assert_eq!(app.freematics_dtcs[0].codes[0].code, "P0134");
+        assert_eq!(app.freematics_dtcs[1].status, Some(1));
+        assert!(
+            command_rx.try_recv().is_err(),
+            "passive telemetry must not send diagnostic commands"
+        );
+
+        let context = egui::Context::default();
+        let _ = context.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.show_dtcs(ui));
+            },
+        );
+        assert!(
+            command_rx.try_recv().is_err(),
+            "drawing cached DTCs must remain passive"
+        );
+    }
 
     #[test]
     fn adapter_selection_routes_commands_and_reconnection_clears_vehicle_state() {
@@ -2555,14 +2801,41 @@ mod adapter_ui_tests {
             Some(10)
         );
         assert!(!app.pid_is_stale("010C", app.live_data.get("010C").unwrap()));
-        assert_eq!(app.live_data.get("010C").unwrap().history, [820.0]);
+        assert_eq!(
+            app.live_data
+                .get("010C")
+                .unwrap()
+                .history
+                .iter()
+                .map(|point| point.value)
+                .collect::<Vec<_>>(),
+            [820.0]
+        );
 
         app.apply_freematics_frame(frame_for(42, 1250, 540, 1500));
         assert!(app.pid_is_stale("010C", app.live_data.get("010C").unwrap()));
-        assert_eq!(app.live_data.get("010C").unwrap().history, [820.0]);
+        assert_eq!(
+            app.live_data
+                .get("010C")
+                .unwrap()
+                .history
+                .iter()
+                .map(|point| point.value)
+                .collect::<Vec<_>>(),
+            [820.0]
+        );
 
         app.apply_freematics_frame(frame_for(99, 250, 810, 8));
         assert_eq!(app.freematics_boot_id, Some(99));
-        assert_eq!(app.live_data.get("010C").unwrap().history, [810.0]);
+        assert_eq!(
+            app.live_data
+                .get("010C")
+                .unwrap()
+                .history
+                .iter()
+                .map(|point| point.value)
+                .collect::<Vec<_>>(),
+            [810.0]
+        );
     }
 }

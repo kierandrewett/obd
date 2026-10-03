@@ -17,17 +17,46 @@ where
     A: ElmAdapter,
     F: Fn(&str),
 {
+    init_elm_with_mode(elm, status, crate::elm327::ElmCanMode::Auto).await
+}
+
+/// Initialise an ELM adapter in automatic OBD mode or an explicitly selected
+/// Corsa D medium-speed CAN mode. The latter is opt-in and must fail closed if
+/// the adapter rejects either user-protocol command.
+pub async fn init_elm_with_mode<A, F>(
+    elm: &mut A,
+    status: F,
+    mode: crate::elm327::ElmCanMode,
+) -> Result<(), Elm327Error>
+where
+    A: ElmAdapter,
+    F: Fn(&str),
+{
     // Reset — ignore errors; the device may not respond immediately.
     let _ = elm.send("ATZ", 2000).await;
     elm.sleep_ms(500).await;
 
-    for command in ["ATE0", "ATL0", "ATS0", "ATH0", "ATSP0"] {
+    for command in ["ATE0", "ATL0", "ATS0", "ATH0"] {
         let lines = elm.send(command, 2000).await?;
         if !lines.iter().any(|line| line.trim() == "OK") {
             return Err(Elm327Error::InitFailed(format!(
                 "{command} rejected: {}",
                 lines.join(" | ")
             )));
+        }
+    }
+
+    match mode {
+        crate::elm327::ElmCanMode::Auto => {
+            require_elm_ok(elm, "ATSP0").await?;
+        }
+        crate::elm327::ElmCanMode::CorsaDMediumSpeed => {
+            // ELM327 PP 2C=0x91 selects 11-bit ISO-TP with the 8/7 bitrate
+            // multiplier; PP 2D=0x06 gives (500/6)*(8/7) ~= 95.2 kbit/s.
+            // AT PB applies temporary parameters and is supported only by
+            // genuine/compatible ELM implementations. Never fall back to HS.
+            require_elm_ok(elm, "AT PB 91 06").await?;
+            require_elm_ok(elm, "ATSPB").await?;
         }
     }
 
@@ -44,26 +73,65 @@ where
     }
 
     status("Detecting OBD protocol...");
-    let lines = request_hex(elm, "0100", 8000).await?;
-    if !lines
-        .iter()
-        .any(|line| line.starts_with("4100") && line.len() >= 12)
-    {
+    let has_obd_pid_response = match request_hex(elm, "0100", 8000).await {
+        Ok(lines) => lines
+            .iter()
+            .any(|line| line.starts_with("4100") && line.len() >= 12),
+        Err(error) if mode == crate::elm327::ElmCanMode::CorsaDMediumSpeed => {
+            tracing::info!(error = %error, "No generic OBD Mode 01 responder on selected MS-CAN bus");
+            false
+        }
+        Err(error) => return Err(error),
+    };
+    if !has_obd_pid_response && mode == crate::elm327::ElmCanMode::Auto {
         return Err(Elm327Error::InitFailed(
             "No supported-PID response; check ignition and adapter connection".into(),
         ));
     }
 
-    if let Ok(lines) = elm.send("ATDPN", 1000).await {
-        if let Some(p) = lines.first() {
-            elm.info_mut().protocol = decode_protocol(p.trim()).to_string();
+    let protocol_lines = match mode {
+        crate::elm327::ElmCanMode::Auto => elm.send("ATDPN", 1000).await.ok(),
+        crate::elm327::ElmCanMode::CorsaDMediumSpeed => Some(elm.send("ATDPN", 1000).await?),
+    };
+    if let Some(p) = protocol_lines.as_ref().and_then(|lines| lines.first()) {
+        if mode == crate::elm327::ElmCanMode::CorsaDMediumSpeed
+            && p.trim().trim_start_matches('A') != "B"
+        {
+            return Err(Elm327Error::InitFailed(format!(
+                "Requested Corsa D MS-CAN User Protocol B, adapter reports {}",
+                p.trim()
+            )));
         }
+        elm.info_mut().protocol = decode_protocol(p.trim()).to_string();
+    } else if mode == crate::elm327::ElmCanMode::CorsaDMediumSpeed {
+        return Err(Elm327Error::InitFailed(
+            "Adapter did not report the selected MS-CAN protocol".into(),
+        ));
+    }
+
+    if mode == crate::elm327::ElmCanMode::CorsaDMediumSpeed {
+        elm.info_mut().protocol = if has_obd_pid_response {
+            "Corsa D MS-CAN · ISO-TP 11-bit · 95.2 kbit/s".into()
+        } else {
+            "Corsa D MS-CAN · 95.2 kbit/s · no generic OBD responder".into()
+        };
     }
 
     if let Ok(lines) = elm.send("ATRV", 1000).await {
         elm.info_mut().voltage = lines.into_iter().next();
     }
 
+    Ok(())
+}
+
+async fn require_elm_ok<A: ElmAdapter>(elm: &mut A, command: &str) -> Result<(), Elm327Error> {
+    let lines = elm.send(command, 2000).await?;
+    if !lines.iter().any(|line| line.trim() == "OK") {
+        return Err(Elm327Error::InitFailed(format!(
+            "{command} rejected: {}",
+            lines.join(" | ")
+        )));
+    }
     Ok(())
 }
 
@@ -239,6 +307,93 @@ pub async fn query_supported_pids<A: DiagnosticAdapter>(
         }
     }
     let _ = event_tx.send(ObdEvent::SupportedPids(all_supported));
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod elm_profile_tests {
+    use super::*;
+    use crate::elm327::{ConnectionInfo, ElmCanMode};
+
+    struct FakeElm {
+        commands: Vec<String>,
+        info: ConnectionInfo,
+        reject_profile: bool,
+    }
+
+    impl FakeElm {
+        fn new(reject_profile: bool) -> Self {
+            Self {
+                commands: Vec::new(),
+                info: ConnectionInfo {
+                    port: "fake".into(),
+                    baud: 38_400,
+                    protocol: String::new(),
+                    elm_version: String::new(),
+                    voltage: None,
+                },
+                reject_profile,
+            }
+        }
+    }
+
+    impl ElmAdapter for FakeElm {
+        async fn send(
+            &mut self,
+            command: &str,
+            _timeout_ms: u64,
+        ) -> Result<Vec<String>, Elm327Error> {
+            self.commands.push(command.to_string());
+            Ok(match command {
+                "AT PB 91 06" if self.reject_profile => vec!["?".into()],
+                "ATDPN" => vec!["B".into()],
+                "ATI" => vec!["ELM327 test".into()],
+                "ATRV" => vec!["12.4V".into()],
+                "0100" => vec!["NO DATA".into()],
+                _ => vec!["OK".into()],
+            })
+        }
+
+        fn info(&self) -> &ConnectionInfo {
+            &self.info
+        }
+
+        fn info_mut(&mut self) -> &mut ConnectionInfo {
+            &mut self.info
+        }
+    }
+
+    #[test]
+    fn corsa_d_mscan_selects_user1_952_kbit_and_never_falls_back() {
+        let mut elm = FakeElm::new(false);
+        crate::elm327::block_on(init_elm_with_mode(
+            &mut elm,
+            |_| {},
+            ElmCanMode::CorsaDMediumSpeed,
+        ))
+        .unwrap();
+
+        assert_eq!(elm.commands[0], "ATZ");
+        assert_eq!(elm.commands[5], "AT PB 91 06");
+        assert_eq!(elm.commands[6], "ATSPB");
+        assert!(!elm.commands.iter().any(|command| command == "ATSP0"));
+        assert_eq!(elm.commands.last().map(String::as_str), Some("ATRV"));
+        assert!(elm.info.protocol.contains("95.2 kbit/s"));
+    }
+
+    #[test]
+    fn unsupported_user_protocol_fails_closed_without_hs_fallback() {
+        let mut elm = FakeElm::new(true);
+        let result = crate::elm327::block_on(init_elm_with_mode(
+            &mut elm,
+            |_| {},
+            ElmCanMode::CorsaDMediumSpeed,
+        ));
+
+        assert!(result.is_err());
+        assert!(elm.commands.iter().any(|command| command == "AT PB 91 06"));
+        assert!(!elm.commands.iter().any(|command| command == "ATSP0"));
+        assert!(!elm.commands.iter().any(|command| command == "0100"));
+    }
 }
 
 /// Full DTC enrichment pipeline using the compile-time embedded DTC database.

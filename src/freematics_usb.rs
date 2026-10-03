@@ -8,6 +8,51 @@ const FRAME_PREFIX: &[u8] = b"@FT1,";
 const MAX_LINE_BYTES: usize = 16 * 1024;
 const USB_BAUD: u32 = 115_200;
 const AUTO_CONNECT_STARTUP_TIMEOUT: Duration = Duration::from_secs(12);
+const DTC_SCAN_INTERVAL_MS: u32 = 120_000;
+const DTC_CODE_SLOTS: usize = 15;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FreematicsDtcMode {
+    Stored,
+    Pending,
+    Permanent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FreematicsDtcStatus {
+    NoResponse,
+    Response,
+    Codes,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FreematicsDtcAvailability {
+    /// This frame has no status field for the mode, so it is not advertised.
+    Unsupported,
+    /// The firmware's initial no-response status has no scan age or count.
+    NoScan,
+    /// A scan age is present and is within the configured scan interval.
+    Fresh,
+    /// A scan age is present but exceeds the configured scan interval.
+    Stale,
+    /// A status field was present but did not contain a defined status value.
+    UnknownStatus,
+}
+
+/// One mode-specific DTC scan decoded from an FT1 frame.
+///
+/// `count` and `code_slots` are optional because the firmware only emits them
+/// after the first scan. Slots retain the ECU's raw 16-bit DTC values; unused
+/// slots are represented by `Some(0)` when emitted by the firmware.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FreematicsDtcScan {
+    pub mode: FreematicsDtcMode,
+    pub availability: FreematicsDtcAvailability,
+    pub status: Option<FreematicsDtcStatus>,
+    pub count: Option<u8>,
+    pub code_slots: [Option<u16>; DTC_CODE_SLOTS],
+    pub age_ms: Option<u32>,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TelemetryField {
@@ -22,12 +67,81 @@ pub struct FreematicsFrame {
     pub capture_utc_ms: Option<i64>,
     pub dropped_records: u32,
     pub supported_pids: Option<HashSet<u8>>,
+    pub vin: Option<String>,
     pub fields: Vec<TelemetryField>,
     pub corrupt_records: u64,
     pub reader_drops: u64,
 }
 
 impl FreematicsFrame {
+    /// Return stored, pending, and permanent DTC scan records in that order.
+    pub fn dtc_scans(&self) -> [FreematicsDtcScan; 3] {
+        [
+            self.dtc_scan(FreematicsDtcMode::Stored, 0x300, 0x310, 0x301, 0x360),
+            self.dtc_scan(FreematicsDtcMode::Pending, 0x320, 0x330, 0x321, 0x361),
+            self.dtc_scan(FreematicsDtcMode::Permanent, 0x340, 0x350, 0x341, 0x362),
+        ]
+    }
+
+    fn dtc_scan(
+        &self,
+        mode: FreematicsDtcMode,
+        count_pid: u16,
+        status_pid: u16,
+        base_pid: u16,
+        age_pid: u16,
+    ) -> FreematicsDtcScan {
+        let status_value = self.field_u32(status_pid);
+        let status = status_value.and_then(|value| match value {
+            0 => Some(FreematicsDtcStatus::NoResponse),
+            1 => Some(FreematicsDtcStatus::Response),
+            2 => Some(FreematicsDtcStatus::Codes),
+            _ => None,
+        });
+        let count = self
+            .field_u32(count_pid)
+            .and_then(|value| u8::try_from(value).ok());
+        let age_ms = self.field_u32(age_pid);
+        let mut code_slots = [None; DTC_CODE_SLOTS];
+        for (index, slot) in code_slots.iter_mut().enumerate() {
+            *slot = self
+                .field_u32(base_pid + index as u16)
+                .and_then(|value| u16::try_from(value).ok());
+        }
+
+        let availability = match (status_value, status, age_ms, count) {
+            (None, _, _, _) => FreematicsDtcAvailability::Unsupported,
+            (Some(_), None, _, _) => FreematicsDtcAvailability::UnknownStatus,
+            (Some(0), Some(FreematicsDtcStatus::NoResponse), None, None) => {
+                FreematicsDtcAvailability::NoScan
+            }
+            (_, _, Some(age), _) if age > DTC_SCAN_INTERVAL_MS => FreematicsDtcAvailability::Stale,
+            _ => FreematicsDtcAvailability::Fresh,
+        };
+
+        FreematicsDtcScan {
+            mode,
+            availability,
+            status,
+            count,
+            code_slots,
+            age_ms,
+        }
+    }
+
+    fn field_u32(&self, pid: u16) -> Option<u32> {
+        let value = self
+            .fields
+            .iter()
+            .find(|field| field.pid == pid)?
+            .values
+            .first()?;
+        if *value < 0.0 || *value > u32::MAX as f64 || value.fract() != 0.0 {
+            return None;
+        }
+        Some(*value as u32)
+    }
+
     pub fn measurements(&self) -> Vec<FreematicsMeasurement> {
         let definitions = obd::mode01_pids();
         let mut output = Vec::new();
@@ -158,6 +272,16 @@ pub fn parse_line(line: &[u8]) -> Option<FreematicsFrame> {
     let capture_utc_ms: i64 = metadata.next()?.parse().ok()?;
     let dropped_records = metadata.next()?.parse().ok()?;
     let supported_text = metadata.next()?;
+    let (supported_text, vin) = match supported_text.split_once(";vin=") {
+        Some((supported, vin))
+            if vin.len() == 17 && vin.bytes().all(|byte| byte.is_ascii_alphanumeric()) =>
+        {
+            (supported, Some(vin.to_string()))
+        }
+        Some(_) => return None,
+        None if supported_text.contains(';') => return None,
+        None => (supported_text, None),
+    };
     let supported_pids = if supported_text.is_empty() {
         None
     } else {
@@ -213,6 +337,7 @@ pub fn parse_line(line: &[u8]) -> Option<FreematicsFrame> {
         capture_utc_ms,
         dropped_records,
         supported_pids,
+        vin,
         fields,
         corrupt_records: 0,
         reader_drops: 0,
@@ -330,6 +455,15 @@ mod tests {
         format!("@FT1,42,{capture_ms},1,1790966400000,0,{supported}|{payload}*{checksum:02X}\n")
     }
 
+    fn dtc_wire_frame(fields: &str) -> FreematicsFrame {
+        let payload = format!("ABCDEF#0:100,{fields}");
+        let checksum = payload
+            .bytes()
+            .fold(0u8, |sum, byte| sum.wrapping_add(byte));
+        let line = format!("@FT1,42,100,0,0,0,|{payload}*{checksum:02X}");
+        parse_line(line.as_bytes()).unwrap()
+    }
+
     #[test]
     fn parses_partial_records_and_preserves_capture_metadata_and_waveforms() {
         let line = wire_record(1200, 720.0, 125, "0C,0D");
@@ -340,6 +474,7 @@ mod tests {
         assert_eq!(frame.boot_id, 42);
         assert_eq!(frame.capture_ms, 1200);
         assert_eq!(frame.capture_utc_ms, Some(1_790_966_400_000));
+        assert_eq!(frame.vin, None);
         assert_eq!(frame.measurements()[0].cmd, "010C");
         assert_eq!(frame.measurements()[0].age_ms, Some(125));
         assert_eq!(frame.measurements()[0].supported, Some(true));
@@ -352,6 +487,23 @@ mod tests {
                 .values,
             [100.0, 1280.0]
         );
+    }
+
+    #[test]
+    fn parses_valid_optional_vin_suffix_without_changing_supported_pids() {
+        let line = wire_record(1200, 720.0, 125, "0C,0D;vin=1HGCM82633A004352");
+        let frame = parse_line(line.trim_end().as_bytes()).unwrap();
+
+        assert_eq!(frame.vin.as_deref(), Some("1HGCM82633A004352"));
+        assert_eq!(frame.supported_pids.unwrap(), HashSet::from([0x0C, 0x0D]));
+    }
+
+    #[test]
+    fn rejects_vin_suffixes_that_are_not_exactly_17_ascii_alphanumeric_bytes() {
+        for vin in ["1HGCM82633A00435", "1HGCM82633A00435-"] {
+            let line = wire_record(1200, 720.0, 125, &format!("0C;vin={vin}"));
+            assert!(parse_line(line.trim_end().as_bytes()).is_none(), "{vin}");
+        }
     }
 
     #[test]
@@ -387,6 +539,55 @@ mod tests {
         let frame = parse_line(line.as_bytes()).unwrap();
         assert_eq!(frame.model_b_supply_voltage(), Some((13.75, Some(12))));
         assert_eq!(frame.ecu_control_module_voltage(), Some((13.82, Some(15))));
+    }
+
+    #[test]
+    fn decodes_distinct_dtc_modes_status_counts_slots_and_scan_ages() {
+        let fields = "300:2,301:264,302:265,303:0,304:0,305:0,306:0,307:0,308:0,309:0,30A:0,30B:0,30C:0,30D:0,30E:0,30F:0,310:2,360:1000,320:0,330:1,361:120000,340:1,341:8721,350:2,362:120001";
+        let scans = dtc_wire_frame(fields).dtc_scans();
+
+        assert_eq!(scans[0].mode, FreematicsDtcMode::Stored);
+        assert_eq!(scans[0].availability, FreematicsDtcAvailability::Fresh);
+        assert_eq!(scans[0].status, Some(FreematicsDtcStatus::Codes));
+        assert_eq!(scans[0].count, Some(2));
+        assert_eq!(scans[0].code_slots[0], Some(264));
+        assert_eq!(scans[0].code_slots[1], Some(265));
+        assert_eq!(scans[0].code_slots[2], Some(0));
+        assert_eq!(scans[0].age_ms, Some(1000));
+
+        assert_eq!(scans[1].mode, FreematicsDtcMode::Pending);
+        assert_eq!(scans[1].availability, FreematicsDtcAvailability::Fresh);
+        assert_eq!(scans[1].status, Some(FreematicsDtcStatus::Response));
+        assert_eq!(scans[1].count, Some(0));
+        assert_eq!(scans[1].age_ms, Some(DTC_SCAN_INTERVAL_MS));
+
+        assert_eq!(scans[2].mode, FreematicsDtcMode::Permanent);
+        assert_eq!(scans[2].availability, FreematicsDtcAvailability::Stale);
+        assert_eq!(scans[2].status, Some(FreematicsDtcStatus::Codes));
+        assert_eq!(scans[2].count, Some(1));
+        assert_eq!(scans[2].code_slots[0], Some(8721));
+        assert_eq!(scans[2].age_ms, Some(DTC_SCAN_INTERVAL_MS + 1));
+    }
+
+    #[test]
+    fn distinguishes_unscanned_and_unreported_dtc_modes_from_empty_scan() {
+        let scans = dtc_wire_frame("310:0,350:1,340:0,362:1").dtc_scans();
+
+        assert_eq!(scans[0].availability, FreematicsDtcAvailability::NoScan);
+        assert_eq!(scans[0].status, Some(FreematicsDtcStatus::NoResponse));
+        assert_eq!(scans[0].count, None);
+        assert_eq!(scans[0].age_ms, None);
+
+        assert_eq!(
+            scans[1].availability,
+            FreematicsDtcAvailability::Unsupported
+        );
+        assert_eq!(scans[1].status, None);
+
+        assert_eq!(scans[2].availability, FreematicsDtcAvailability::Fresh);
+        assert_eq!(scans[2].status, Some(FreematicsDtcStatus::Response));
+        assert_eq!(scans[2].count, Some(0));
+        assert_eq!(scans[2].age_ms, Some(1));
     }
 
     #[test]

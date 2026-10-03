@@ -48,23 +48,59 @@ connected to the car and laptop.
   synchronized. That sampled frame had no RPM/age fields and reported Model B
   supply field 0x24 as 383 (3.83 V under the dashboard's scale); this is not
   evidence of valid vehicle supply voltage or a running ECU.
+- A 12 s passive serial smoke read observed 28 `@FT1` lines: 23 passed the
+  framing/checksum/field checks and 5 had a comma-delimited payload item with
+  no `:` separator. The dashboard independently logged a rising corrupt-record
+  count. Valid records are arriving, but the reason for malformed lines still
+  needs investigation before relying on loss-sensitive captures.
 - The dashboard subsequently logged `CONNECTED` on `/dev/ttyUSB0` using
   `Freematics Telemetry v1` / passive mode. Its debug log reported one
   corrupt record during startup; `obd-dashboard` then held the serial port.
   Do not run a serial monitor concurrently. The connection was established,
   but no live RPM or valid in-car voltage was confirmed through the UI.
+- A repaint-policy regression test reproduced the idle-refresh bug (red when a
+  connected passive stream did not request another repaint) and now passes
+  with a 100 ms repaint interval while Freematics is connected, without
+  enabling diagnostic polling.
 - The user's initial connection log shows auto-detect timing out after about
   1.7 s. Linux's serialport documentation warns that opening a port can pulse
   DTR and reset ESP32/CH340 devices even when DTR is preserved. Auto-detect now
   waits up to 12 s for a valid checksummed frame to allow that boot cycle.
 
-Still not verified on the vehicle: live RPM and supply voltage/ages, 250 ms
-sampling cadence, upload continuity, SD journalling while connected, and
-recording after closing/disconnecting the dashboard. Do not treat the smoke
-test as a vehicle test or a mechanical diagnosis.
+## Current USB and diagnostics changes
 
-On the live dashboard, the operator can write `SHUDDER`, `AC_ON`, `AC_OFF`, and
-`ELECTRICAL_LOAD_CHANGE` markers into the laptop's `obd-debug.log`. Each marker
-contains laptop UTC, the newest device capture UTC/monotonic timestamp, and
-device-frame receive age so it can be aligned with the SD journal. These are
-manual observations, not automated A/C state readings or a diagnosis.
+The firmware now publishes each FT1 telemetry record as one contiguous serial
+write. The Model B USB queue is bounded and coalesces queued old snapshots to
+the newest waiting sample while preserving any record already in flight. Every
+discard increments the cumulative USB drop counter in the next frame. This is
+a live-view policy only; the cloud uploader and SD journal use their existing
+independent acquisition path.
+
+`tools/check-usb-telemetry-queue.py` compiles the production queue header with a
+mutex-backed FreeRTOS critical-section shim. It checks preserved in-flight
+records, stale-backlog dropping, sequence/checksum integrity, and concurrent
+single-producer/single-consumer stress. It is a host simulation, not a
+measurement of vehicle sampling or upload latency under a saturated UART.
+
+FT1's supported-PID header can now append a validated optional `;vin=` value.
+The dashboard shows that device-reported VIN and supported Mode 01 inventory.
+The firmware already has an 87-entry generic Mode 01 catalogue; at runtime it
+reports and polls only PIDs the connected ECU advertises. It does not invent
+support or refresh a failed reading's timestamp. The firmware's periodic
+stored/pending/permanent DTC scans (two-minute interval) are shown with each
+scan's status and age. The passive USB connection still cannot trigger a scan
+or clear codes. Freeze-frame and manufacturer-specific module scans are not
+provided by this stream.
+
+Parser and app tests cover VIN validation, DTC status/count/code/age semantics,
+unscanned versus successful-empty scans, and passive UI behavior. The repeatable
+serial fixture still covers RPM/voltage dips, actual per-PID ages, partial and
+corrupt input, debug lines, and a device restart. The Corsa D MS-CAN profile is
+separate: it configures an ELM-compatible adapter for User Protocol B at about
+95.2 kbit/s and does not add Opel body-module addressing or decoding.
+
+The latest firmware build has not yet been installed in the connected car.
+Live acquisition ages, actual RPM/supply voltage, upload continuity, SD
+journalling through the reset, and recording after closing the dashboard still
+need post-flash vehicle verification. Do not treat simulated tests as a
+vehicle test or a mechanical diagnosis.

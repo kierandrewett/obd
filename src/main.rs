@@ -208,7 +208,11 @@ fn obd_worker(
 
         if let Some(cmd) = cmd {
             match cmd {
-                OdbCmd::Connect { port, baud } => {
+                OdbCmd::Connect {
+                    port,
+                    baud,
+                    elm_can_mode,
+                } => {
                     elm = None;
                     freematics = None;
                     live_running = false;
@@ -222,9 +226,15 @@ fn obd_worker(
                     };
 
                     let result = if let Some(port_name) = port {
-                        elm327::connect(&port_name, baud, Some(&progress))
+                        elm327::connect_with_mode(&port_name, baud, elm_can_mode, Some(&progress))
                     } else {
-                        elm327::auto_connect(Some(&progress))
+                        if elm_can_mode == elm327::ElmCanMode::Auto {
+                            elm327::auto_connect(Some(&progress))
+                        } else {
+                            Err(elm327::Elm327Error::InitFailed(
+                                "The Corsa D MS-CAN profile requires a selected serial port and baud rate".into(),
+                            ))
+                        }
                     };
 
                     finish_connection(result.map(AnyAdapter::Serial), &mut elm, &event_tx);
