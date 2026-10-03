@@ -3,6 +3,8 @@ pub mod app;
 pub mod dtc_database;
 pub mod dtc_descriptions;
 pub mod elm327;
+#[cfg(not(target_arch = "wasm32"))]
+mod freematics_usb;
 pub mod gauges;
 pub mod obd;
 pub mod obd_ops;
