@@ -309,16 +309,29 @@ struct HistoryPoint {
     value: f64,
 }
 
-fn show_time_series(
-    ui: &mut egui::Ui,
-    label: &str,
-    state: &LivePidState,
+#[derive(Clone, Copy)]
+struct TimeSeriesConfig<'a> {
+    label: &'a str,
     color: Color32,
-    unit: &str,
+    unit: &'a str,
     minimum_range: f64,
     freshness: Duration,
     max_gap: Duration,
-) {
+}
+
+struct GaugeSpec {
+    column: usize,
+    pid: &'static str,
+    label: &'static str,
+    min: f64,
+    max: f64,
+    unit: &'static str,
+    warning: Option<f64>,
+    danger: Option<f64>,
+    decimals: usize,
+}
+
+fn show_time_series(ui: &mut egui::Ui, state: &LivePidState, config: TimeSeriesConfig<'_>) {
     let now = Instant::now();
     let window = Duration::from_secs(60);
     let start = now - window;
@@ -335,21 +348,21 @@ fn show_time_series(
         .saturating_add(state.received_at.elapsed());
 
     ui.horizontal(|ui| {
-        ui.label(RichText::new(label).strong());
+        ui.label(RichText::new(config.label).strong());
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(
-                RichText::new(format!("{:.0} {unit}", state.numeric_value))
+                RichText::new(format!("{:.0} {}", state.numeric_value, config.unit))
                     .monospace()
-                    .color(color),
+                    .color(config.color),
             );
             ui.label(
-                RichText::new(if age > freshness {
+                RichText::new(if age > config.freshness {
                     format!("Stale · {} ms", age.as_millis())
                 } else {
                     format!("{} ms", age.as_millis())
                 })
                 .small()
-                .color(if age > freshness {
+                .color(if age > config.freshness {
                     Color32::from_rgb(220, 170, 80)
                 } else {
                     ui.visuals().weak_text_color()
@@ -369,7 +382,7 @@ fn show_time_series(
     let plot = rect.shrink2(egui::vec2(42.0, 18.0));
     let values: Vec<_> = samples.iter().map(|point| point.value).collect();
     let (mut min, mut max) = if values.is_empty() {
-        (0.0, minimum_range)
+        (0.0, config.minimum_range)
     } else {
         (
             values.iter().copied().fold(f64::INFINITY, f64::min),
@@ -377,10 +390,10 @@ fn show_time_series(
         )
     };
     let observed_range = max - min;
-    if observed_range < minimum_range {
+    if observed_range < config.minimum_range {
         let center = (min + max) / 2.0;
-        min = center - minimum_range / 2.0;
-        max = center + minimum_range / 2.0;
+        min = center - config.minimum_range / 2.0;
+        max = center + config.minimum_range / 2.0;
     }
     let padding = (max - min) * 0.08;
     min -= padding;
@@ -426,10 +439,10 @@ fn show_time_series(
         )
     };
     for pair in samples.windows(2) {
-        if pair[1].captured_at.duration_since(pair[0].captured_at) <= max_gap {
+        if pair[1].captured_at.duration_since(pair[0].captured_at) <= config.max_gap {
             painter.line_segment(
                 [position(pair[0]), position(pair[1])],
-                egui::Stroke::new(2.0, color),
+                egui::Stroke::new(2.0, config.color),
             );
         }
     }
@@ -457,8 +470,9 @@ fn show_time_series(
             })
             .expect("samples was checked as non-empty");
         response.on_hover_text(format!(
-            "{:.1} {unit} · captured {:.2}s ago",
+            "{:.1} {} · captured {:.2}s ago",
             nearest.value,
+            config.unit,
             now.duration_since(nearest.captured_at).as_secs_f32()
         ));
     }
@@ -1644,66 +1658,72 @@ impl ObdApp {
 
             // ── Second row: 4 smaller gauges ────────────────────────────
             ui.columns(4, |cols| {
-                let gauges: [(
-                    usize,
-                    &str,
-                    &str,
-                    f64,
-                    f64,
-                    &str,
-                    Option<f64>,
-                    Option<f64>,
-                    usize,
-                ); 4] = [
-                    (
-                        0,
-                        "0105",
-                        "Coolant",
-                        -40.0,
-                        215.0,
-                        "\u{00B0}C",
-                        Some(100.0),
-                        Some(115.0),
-                        0,
-                    ),
-                    (
-                        1,
-                        "015C",
-                        "Oil Temp",
-                        -40.0,
-                        215.0,
-                        "\u{00B0}C",
-                        Some(120.0),
-                        Some(140.0),
-                        0,
-                    ),
-                    (2, "0111", "Throttle", 0.0, 100.0, "%", None, None, 1),
-                    (
-                        3,
-                        "0104",
-                        "Load",
-                        0.0,
-                        100.0,
-                        "%",
-                        Some(80.0),
-                        Some(95.0),
-                        1,
-                    ),
+                let gauges = [
+                    GaugeSpec {
+                        column: 0,
+                        pid: "0105",
+                        label: "Coolant",
+                        min: -40.0,
+                        max: 215.0,
+                        unit: "\u{00B0}C",
+                        warning: Some(100.0),
+                        danger: Some(115.0),
+                        decimals: 0,
+                    },
+                    GaugeSpec {
+                        column: 1,
+                        pid: "015C",
+                        label: "Oil Temp",
+                        min: -40.0,
+                        max: 215.0,
+                        unit: "\u{00B0}C",
+                        warning: Some(120.0),
+                        danger: Some(140.0),
+                        decimals: 0,
+                    },
+                    GaugeSpec {
+                        column: 2,
+                        pid: "0111",
+                        label: "Throttle",
+                        min: 0.0,
+                        max: 100.0,
+                        unit: "%",
+                        warning: None,
+                        danger: None,
+                        decimals: 1,
+                    },
+                    GaugeSpec {
+                        column: 3,
+                        pid: "0104",
+                        label: "Load",
+                        min: 0.0,
+                        max: 100.0,
+                        unit: "%",
+                        warning: Some(80.0),
+                        danger: Some(95.0),
+                        decimals: 1,
+                    },
                 ];
-                for (i, cmd, label, min, max, unit, warn, danger, dec) in gauges {
-                    cols[i].vertical_centered(|ui| {
-                        if let Some(s) = self.live_data.get(cmd) {
-                            let mut g = RadialGauge::new(label, s.numeric_value, min, max, unit)
-                                .size(small_gauge)
-                                .decimals(dec);
-                            if let Some(w) = warn {
+                for gauge in gauges {
+                    cols[gauge.column].vertical_centered(|ui| {
+                        if let Some(s) = self.live_data.get(gauge.pid) {
+                            let mut g = RadialGauge::new(
+                                gauge.label,
+                                s.numeric_value,
+                                gauge.min,
+                                gauge.max,
+                                gauge.unit,
+                            )
+                            .size(small_gauge)
+                            .decimals(gauge.decimals);
+                            if let Some(w) = gauge.warning {
                                 g = g.warning(w);
                             }
-                            if let Some(d) = danger {
+                            if let Some(d) = gauge.danger {
                                 g = g.danger(d);
                             }
                             g.show(ui);
-                            self.show_pid_age(ui, cmd, s);
+                            self.show_pid_age(ui, gauge.pid, s);
                         }
                     });
                 }
@@ -1718,87 +1738,90 @@ impl ObdApp {
             if let Some(state) = self.live_data.get("010C") {
                 show_time_series(
                     ui,
-                    "Engine RPM",
                     state,
-                    Color32::from_rgb(220, 115, 95),
-                    "rpm",
-                    180.0,
-                    Duration::from_millis(250),
-                    Duration::from_secs(1),
+                    TimeSeriesConfig {
+                        label: "Engine RPM",
+                        color: Color32::from_rgb(220, 115, 95),
+                        unit: "rpm",
+                        minimum_range: 180.0,
+                        freshness: Duration::from_millis(250),
+                        max_gap: Duration::from_secs(1),
+                    },
                 );
             }
             ui.columns(2, |cols| {
                 let charts = [
                     (
                         "010D",
-                        "Road speed",
-                        Color32::from_rgb(85, 165, 225),
-                        "km/h",
-                        8.0,
-                        1.0,
-                        3.0,
+                        TimeSeriesConfig {
+                            label: "Road speed",
+                            color: Color32::from_rgb(85, 165, 225),
+                            unit: "km/h",
+                            minimum_range: 8.0,
+                            freshness: Duration::from_secs(1),
+                            max_gap: Duration::from_secs(3),
+                        },
                     ),
                     (
                         "0105",
-                        "Coolant temperature",
-                        Color32::from_rgb(225, 180, 65),
-                        "°C",
-                        15.0,
-                        1.0,
-                        4.0,
+                        TimeSeriesConfig {
+                            label: "Coolant temperature",
+                            color: Color32::from_rgb(225, 180, 65),
+                            unit: "°C",
+                            minimum_range: 15.0,
+                            freshness: Duration::from_secs(1),
+                            max_gap: Duration::from_secs(4),
+                        },
                     ),
                     (
                         "0111",
-                        "Throttle position",
-                        Color32::from_rgb(75, 190, 125),
-                        "%",
-                        10.0,
-                        1.0,
-                        4.0,
+                        TimeSeriesConfig {
+                            label: "Throttle position",
+                            color: Color32::from_rgb(75, 190, 125),
+                            unit: "%",
+                            minimum_range: 10.0,
+                            freshness: Duration::from_secs(1),
+                            max_gap: Duration::from_secs(4),
+                        },
                     ),
                     (
                         "0104",
-                        "Calculated engine load",
-                        Color32::from_rgb(175, 125, 220),
-                        "%",
-                        10.0,
-                        1.0,
-                        4.0,
+                        TimeSeriesConfig {
+                            label: "Calculated engine load",
+                            color: Color32::from_rgb(175, 125, 220),
+                            unit: "%",
+                            minimum_range: 10.0,
+                            freshness: Duration::from_secs(1),
+                            max_gap: Duration::from_secs(4),
+                        },
                     ),
                     (
                         "0142",
-                        "ECU control-module voltage",
-                        Color32::from_rgb(80, 195, 195),
-                        "V",
-                        1.0,
-                        1.0,
-                        4.0,
+                        TimeSeriesConfig {
+                            label: "ECU control-module voltage",
+                            color: Color32::from_rgb(80, 195, 195),
+                            unit: "V",
+                            minimum_range: 1.0,
+                            freshness: Duration::from_secs(1),
+                            max_gap: Duration::from_secs(4),
+                        },
                     ),
                     (
                         "012F",
-                        "Fuel level",
-                        Color32::from_rgb(205, 135, 185),
-                        "%",
-                        10.0,
-                        1.0,
-                        4.0,
+                        TimeSeriesConfig {
+                            label: "Fuel level",
+                            color: Color32::from_rgb(205, 135, 185),
+                            unit: "%",
+                            minimum_range: 10.0,
+                            freshness: Duration::from_secs(1),
+                            max_gap: Duration::from_secs(4),
+                        },
                     ),
                 ];
-                for (index, (pid, label, color, unit, min_range, freshness_s, max_gap_s)) in
-                    charts.into_iter().enumerate()
-                {
+                for (index, (pid, config)) in charts.into_iter().enumerate() {
                     if let Some(state) = self.live_data.get(pid) {
                         cols[index % 2].vertical(|ui| {
-                            show_time_series(
-                                ui,
-                                label,
-                                state,
-                                color,
-                                unit,
-                                min_range,
-                                Duration::from_secs_f64(freshness_s),
-                                Duration::from_secs_f64(max_gap_s),
-                            );
+                            show_time_series(ui, state, config);
                             ui.add_space(8.0);
                         });
                     }
