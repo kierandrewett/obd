@@ -142,6 +142,10 @@ impl FreematicsFrame {
         Some(*value as u32)
     }
 
+    fn field_age_ms(&self, pid: u16) -> Option<u32> {
+        self.field_u32(pid)
+    }
+
     pub fn measurements(&self) -> Vec<FreematicsMeasurement> {
         let definitions = obd::mode01_pids();
         let mut output = Vec::new();
@@ -156,12 +160,7 @@ impl FreematicsFrame {
                 continue;
             };
             let age_pid = 0x400 | pid as u16;
-            let age_ms = self
-                .fields
-                .iter()
-                .find(|candidate| candidate.pid == age_pid)
-                .and_then(|candidate| candidate.values.first())
-                .map(|age| (*age).clamp(0.0, u32::MAX as f64) as u32);
+            let age_ms = self.field_age_ms(age_pid);
             output.push(FreematicsMeasurement {
                 cmd,
                 name: definition.description.to_string(),
@@ -184,12 +183,7 @@ impl FreematicsFrame {
             .find(|field| field.pid == 0x24)?
             .values
             .first()?;
-        let age = self
-            .fields
-            .iter()
-            .find(|field| field.pid == 0x94)
-            .and_then(|field| field.values.first())
-            .map(|age| (*age).clamp(0.0, u32::MAX as f64) as u32);
+        let age = self.field_age_ms(0x94);
         Some((value / 100.0, age))
     }
 
@@ -200,12 +194,7 @@ impl FreematicsFrame {
             .find(|field| field.pid == 0x142)?
             .values
             .first()?;
-        let age = self
-            .fields
-            .iter()
-            .find(|field| field.pid == 0x442)
-            .and_then(|field| field.values.first())
-            .map(|age| (*age).clamp(0.0, u32::MAX as f64) as u32);
+        let age = self.field_age_ms(0x442);
         Some((*value, age))
     }
 }
@@ -600,6 +589,30 @@ mod tests {
         let frame = parse_line(line.as_bytes()).unwrap();
         assert_eq!(frame.model_b_supply_voltage(), Some((13.75, Some(12))));
         assert_eq!(frame.ecu_control_module_voltage(), Some((13.82, Some(15))));
+    }
+
+    #[test]
+    fn malformed_device_ages_are_unavailable_not_falsely_fresh() {
+        let payload = "ABCDEF#10C:600,40C:-1,24:1375,94:1.5,142:13.8,442:4294967296";
+        let checksum = payload
+            .bytes()
+            .fold(0u8, |sum, byte| sum.wrapping_add(byte));
+        let line = format!("@FT1,9,55,0,0,0,|{payload}*{checksum:02X}");
+        let frame = parse_line(line.as_bytes()).unwrap();
+
+        let rpm = frame
+            .measurements()
+            .into_iter()
+            .find(|measurement| measurement.cmd == "010C")
+            .unwrap();
+        assert_eq!(rpm.value, 600.0);
+        assert_eq!(rpm.age_ms, None, "negative age must not become zero");
+        assert_eq!(frame.model_b_supply_voltage(), Some((13.75, None)));
+        assert_eq!(
+            frame.ecu_control_module_voltage(),
+            Some((13.8, None)),
+            "out-of-range age must not saturate to a plausible age"
+        );
     }
 
     #[test]
