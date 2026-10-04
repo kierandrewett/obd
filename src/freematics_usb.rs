@@ -6,12 +6,18 @@ use std::time::{Duration, Instant};
 
 const FRAME_PREFIX: &[u8] = b"@FT1,";
 const MAX_LINE_BYTES: usize = 16 * 1024;
-const USB_BAUD: u32 = 115_200;
+const USB_BAUD: u32 = 460_800;
+const LEGACY_USB_BAUD: u32 = 115_200;
+const LEGACY_BAUD_FALLBACK_DELAY: Duration = Duration::from_secs(3);
 const AUTO_CONNECT_STARTUP_TIMEOUT: Duration = Duration::from_secs(12);
 const FREEMATICS_USB_VID: u16 = 0x10c4;
 const FREEMATICS_USB_PID: u16 = 0xea60;
 const DTC_SCAN_INTERVAL_MS: u32 = 120_000;
 const DTC_CODE_SLOTS: usize = 15;
+
+fn legacy_baud_fallback_due(elapsed: Duration, valid_frame_seen: bool, attempted: bool) -> bool {
+    !valid_frame_seen && !attempted && elapsed >= LEGACY_BAUD_FALLBACK_DELAY
+}
 
 fn is_supported_freematics_port(port: &serialport::SerialPortInfo) -> bool {
     matches!(
@@ -409,6 +415,9 @@ pub fn parse_line(line: &[u8]) -> Option<FreematicsFrame> {
 pub struct FreematicsUsb {
     port: Box<dyn serialport::SerialPort>,
     parser: FreematicsParser,
+    opened_at: Instant,
+    valid_frame_seen: bool,
+    legacy_baud_attempted: bool,
 }
 
 impl FreematicsUsb {
@@ -432,6 +441,9 @@ impl FreematicsUsb {
         Ok(Self {
             port,
             parser: FreematicsParser::default(),
+            opened_at: Instant::now(),
+            valid_frame_seen: false,
+            legacy_baud_attempted: false,
         })
     }
 
@@ -496,19 +508,35 @@ impl FreematicsUsb {
 
     pub fn read_frames(&mut self) -> Result<Vec<FreematicsFrame>, String> {
         let mut bytes = [0u8; 1024];
-        match self.port.read(&mut bytes) {
-            Ok(0) => Ok(Vec::new()),
-            Ok(count) => Ok(self.parser.feed(&bytes[..count])),
+        let frames = match self.port.read(&mut bytes) {
+            Ok(0) => Vec::new(),
+            Ok(count) => self.parser.feed(&bytes[..count]),
             Err(error)
                 if matches!(
                     error.kind(),
                     io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
                 ) =>
             {
-                Ok(Vec::new())
+                Vec::new()
             }
-            Err(error) => Err(format!("Freematics USB read failed: {error}")),
+            Err(error) => return Err(format!("Freematics USB read failed: {error}")),
+        };
+        if !frames.is_empty() {
+            self.valid_frame_seen = true;
+            return Ok(frames);
         }
+        if legacy_baud_fallback_due(
+            self.opened_at.elapsed(),
+            self.valid_frame_seen,
+            self.legacy_baud_attempted,
+        ) {
+            self.port
+                .set_baud_rate(LEGACY_USB_BAUD)
+                .map_err(|error| format!("Cannot try legacy Freematics USB baud: {error}"))?;
+            self.parser = FreematicsParser::default();
+            self.legacy_baud_attempted = true;
+        }
+        Ok(frames)
     }
 
     pub fn corrupt_records(&self) -> u64 {
@@ -519,6 +547,32 @@ impl FreematicsUsb {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prefers_high_speed_and_falls_back_once_only_before_telemetry() {
+        assert_eq!(USB_BAUD, 460_800);
+        assert_eq!(LEGACY_USB_BAUD, 115_200);
+        assert!(!legacy_baud_fallback_due(
+            LEGACY_BAUD_FALLBACK_DELAY - Duration::from_millis(1),
+            false,
+            false,
+        ));
+        assert!(legacy_baud_fallback_due(
+            LEGACY_BAUD_FALLBACK_DELAY,
+            false,
+            false,
+        ));
+        assert!(!legacy_baud_fallback_due(
+            LEGACY_BAUD_FALLBACK_DELAY * 2,
+            true,
+            false,
+        ));
+        assert!(!legacy_baud_fallback_due(
+            LEGACY_BAUD_FALLBACK_DELAY * 2,
+            false,
+            true,
+        ));
+    }
 
     #[test]
     fn auto_detect_accepts_only_the_model_b_cp210x_bridge() {
