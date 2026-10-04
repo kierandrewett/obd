@@ -15,7 +15,8 @@ The repeatable parser-level serial traffic scenario is
 `tests/fixtures/freematics_usb_scenario.txt`, exercised by
 `freematics_usb::tests::simulated_serial_shudder_and_reconnect_scenario_is_repeatable`.
 The test fragments input into 11-byte reads, includes debug output, one
-checksum-corrupt frame, a warm-idle RPM dip (820 to 540 RPM), a Model B supply
+checksum-valid frame with a colonless field (matching the malformed shape
+observed on hardware), a warm-idle RPM dip (820 to 540 RPM), a Model B supply
 dip (13.75 to 11.80 V), an RPM measurement age of 1.5 s (stale against its
 250 ms target), per-frame voltage and motion waveform fields, a cumulative USB
 drop count, and a changed boot ID. Expected result: four valid frames retained,

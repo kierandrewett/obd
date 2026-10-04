@@ -628,6 +628,20 @@ mod tests {
     }
 
     #[test]
+    fn rejects_checksum_correct_record_with_colonless_field_and_counts_it() {
+        let payload = "ABCDEF#0:1250,10C:999,40C:5,BADFIELD";
+        let checksum = payload
+            .bytes()
+            .fold(0u8, |sum, byte| sum.wrapping_add(byte));
+        let line = format!("@FT1,42,1250,1,1790966401250,0,0C|{payload}*{checksum:02X}\n");
+
+        assert!(parse_line(line.trim_end().as_bytes()).is_none());
+        let mut parser = FreematicsParser::default();
+        assert!(parser.feed(line.as_bytes()).is_empty());
+        assert_eq!(parser.corrupt_records(), 1);
+    }
+
+    #[test]
     fn records_without_valid_utc_keep_monotonic_capture_time_only() {
         let payload = "ABCDEF#0:55,10C:600,40C:20";
         let checksum = payload
