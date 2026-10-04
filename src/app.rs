@@ -224,6 +224,8 @@ pub struct ObdApp {
     live_data: HashMap<String, LivePidState>,
     live_running: bool,
     supported_pids: Vec<u8>,
+    #[cfg(not(target_arch = "wasm32"))]
+    freematics_support_reported: bool,
 
     // DTCs
     stored_dtcs: Vec<Dtc>,
@@ -711,6 +713,8 @@ impl ObdApp {
             live_data: HashMap::new(),
             live_running: false,
             supported_pids: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            freematics_support_reported: false,
             stored_dtcs: Vec::new(),
             pending_dtcs: Vec::new(),
             dtc_status: String::new(),
@@ -791,6 +795,10 @@ impl ObdApp {
                         }
                         self.live_data.clear();
                         self.supported_pids.clear();
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            self.freematics_support_reported = false;
+                        }
                         #[cfg(not(target_arch = "wasm32"))]
                         {
                             self.freematics_boot_id = None;
@@ -877,6 +885,10 @@ impl ObdApp {
                     self.voltage = None;
                     self.live_data.clear();
                     self.supported_pids.clear();
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        self.freematics_support_reported = false;
+                    }
                     self.connection_status = "Disconnected".to_string();
                     self.release_wake_lock();
                     self.add_log("[DISCONNECTED]");
@@ -1071,6 +1083,7 @@ impl ObdApp {
         if !freeze_data.is_empty() {
             self.freematics_freeze_data = freeze_data;
         }
+        self.freematics_support_reported = frame.supported_pids.is_some();
         self.supported_pids = frame
             .supported_pids
             .as_ref()
@@ -2948,8 +2961,10 @@ impl ObdApp {
 
                     if self.is_freematics_usb() {
                         ui.label(RichText::new("Device-reported supported Mode 01 PIDs:").strong());
-                        ui.label(if self.supported_pids.is_empty() {
+                        ui.label(if !self.freematics_support_reported {
                             "Not reported yet".to_string()
+                        } else if self.supported_pids.is_empty() {
+                            "Reported: none supported".to_string()
                         } else {
                             format!("{}", self.supported_pids.len())
                         });
@@ -3064,14 +3079,20 @@ impl ObdApp {
             ui.add_space(16.0);
 
             // ── Supported PIDs section ────────────────────────────
-            if !self.supported_pids.is_empty() {
+            if !self.supported_pids.is_empty()
+                || (self.is_freematics_usb() && self.freematics_support_reported)
+            {
                 ui.heading("Supported PIDs");
                 ui.add_space(4.0);
 
-                ui.label(format!(
-                    "{} PIDs supported by this vehicle",
-                    self.supported_pids.len()
-                ));
+                if self.supported_pids.is_empty() {
+                    ui.label("Completed scan: no supported Mode 01 PIDs reported");
+                } else {
+                    ui.label(format!(
+                        "{} PIDs supported by this vehicle",
+                        self.supported_pids.len()
+                    ));
+                }
                 ui.add_space(4.0);
 
                 let pid_names: HashMap<u8, &str> = self
@@ -3484,6 +3505,7 @@ mod adapter_ui_tests {
         assert_eq!(app.vin.as_deref(), Some("1HGCM82633A004352"));
         assert_eq!(app.freematics_calibration_id.as_deref(), Some("CAL-123"));
         assert_eq!(app.freematics_ecu_name.as_deref(), Some("ENGINE"));
+        assert!(app.freematics_support_reported);
         assert_eq!(
             app.supported_pids.iter().copied().collect::<HashSet<_>>(),
             HashSet::from([0x0C, 0x0D])
@@ -3634,6 +3656,42 @@ mod adapter_ui_tests {
         app.apply_freematics_frame(omitted_dtc_frame);
         assert_eq!(app.freematics_dtcs[0].count, Some(1));
         assert_eq!(app.freematics_dtcs[0].codes[0].code, "P0134");
+    }
+
+    #[test]
+    fn freematics_support_ui_state_distinguishes_unknown_and_empty() {
+        let (commands, _command_rx) = mpsc::channel();
+        let (_events, event_rx) = mpsc::channel();
+        let (_telemetry_tx, telemetry_rx) = mpsc::channel();
+        let mut app = ObdApp::new_state(commands, event_rx, telemetry_rx, None);
+        app.connection_kind = ConnectionKind::FreematicsUsb;
+
+        let mut frame = crate::freematics_usb::FreematicsFrame {
+            boot_id: 7,
+            capture_ms: 1_250,
+            reader_received_at: Instant::now(),
+            capture_utc_ms: None,
+            dropped_records: 0,
+            supported_pids: Some(HashSet::new()),
+            raw_mode01: HashMap::new(),
+            vin: None,
+            calibration_id: None,
+            ecu_name: None,
+            fields: Vec::new(),
+            corrupt_records: 0,
+            corrupt_sample_hex: None,
+            reader_drops: 0,
+        };
+        app.apply_freematics_frame(frame.clone());
+        assert!(app.freematics_support_reported);
+        assert!(app.supported_pids.is_empty());
+
+        frame.capture_ms += 1;
+        frame.reader_received_at = Instant::now();
+        frame.supported_pids = None;
+        app.apply_freematics_frame(frame);
+        assert!(!app.freematics_support_reported);
+        assert!(app.supported_pids.is_empty());
     }
 
     #[test]

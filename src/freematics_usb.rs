@@ -86,6 +86,8 @@ pub struct FreematicsFrame {
     pub reader_received_at: Instant,
     pub capture_utc_ms: Option<i64>,
     pub dropped_records: u32,
+    /// `None` means firmware has not reported a support result. An explicit
+    /// `-` metadata marker means the scan completed and found no supported PIDs.
     pub supported_pids: Option<HashSet<u8>>,
     /// Exact ECU response data bytes for the passive USB-only structured PID
     /// extension. The cloud telemetry schema remains unchanged.
@@ -550,6 +552,8 @@ pub fn parse_line(line: &[u8]) -> Option<FreematicsFrame> {
     }
     let supported_pids = if supported_text.is_empty() {
         None
+    } else if supported_text == "-" {
+        Some(HashSet::new())
     } else {
         Some(
             supported_text
@@ -1153,6 +1157,22 @@ mod tests {
 
         assert_eq!(frame.vin.as_deref(), Some("1HGCM82633A004352"));
         assert_eq!(frame.supported_pids.unwrap(), HashSet::from([0x0C, 0x0D]));
+    }
+
+    #[test]
+    fn distinguishes_unknown_pid_support_from_a_completed_empty_scan() {
+        let unknown = parse_line(wire_record(1200, 720.0, 125, "").trim_end().as_bytes()).unwrap();
+        let completed_empty =
+            parse_line(wire_record(1200, 720.0, 125, "-").trim_end().as_bytes()).unwrap();
+
+        assert_eq!(unknown.supported_pids, None);
+        assert_eq!(completed_empty.supported_pids, Some(HashSet::new()));
+        assert!(
+            completed_empty
+                .measurements()
+                .iter()
+                .all(|measurement| measurement.supported == Some(false))
+        );
     }
 
     #[test]
