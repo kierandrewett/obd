@@ -285,6 +285,7 @@ pub struct J2534 {
 impl J2534 {
     /// Open one explicitly selected OBD CAN protocol. A successful 0100 response
     /// is required before the GUI reports a vehicle connection.
+    #[allow(dead_code)] // Convenience wrapper for the common 11-bit OBD address.
     pub fn connect(path: &Path, protocol: CanProtocol) -> Result<Self, Elm327Error> {
         Self::connect_to(path, protocol, 0x10)
     }

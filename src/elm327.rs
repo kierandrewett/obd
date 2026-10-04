@@ -89,6 +89,7 @@ pub trait ElmAdapter {
     async fn sleep_ms(&mut self, _ms: u64) {}
 
     /// Like `send` but logs the raw exchange at INFO level.
+    #[allow(dead_code)] // Default adapter API; callers choose whether raw traffic is logged.
     async fn send_logged(
         &mut self,
         cmd: &str,
@@ -236,6 +237,7 @@ pub fn auto_connect(progress: Option<&dyn Fn(&str)>) -> Result<Elm327, Elm327Err
 
 /// Connect to a specific port with optional baud override
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(dead_code)] // Kept as the default-mode convenience wrapper for downstream callers.
 pub fn connect(
     port_name: &str,
     baud: Option<u32>,

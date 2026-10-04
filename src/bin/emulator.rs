@@ -290,72 +290,74 @@ mod emulator {
 
             match base {
                 // ── AT init commands ─────────────────────────────────────────
-                "ATZ" => return "ELM327 v2.1".into(),
-                "ATI" => return "ELM327 v2.1".into(),
-                "ATRV" => return format!("{:.1}V", self.voltage),
-                c if c.starts_with("AT") => return "OK".into(),
+                "ATZ" => "ELM327 v2.1".into(),
+                "ATI" => "ELM327 v2.1".into(),
+                "ATRV" => format!("{:.1}V", self.voltage),
+                c if c.starts_with("AT") => "OK".into(),
 
                 // ── Supported PIDs ────────────────────────────────────────────
-                "0100" => return "4100BE3F8003".into(),
-                "0120" => return "412000022001".into(),
-                "0140" => return "414044000011".into(),
-                "0160" => return "416000000000".into(),
+                "0100" => "4100BE3F8003".into(),
+                "0120" => "412000022001".into(),
+                "0140" => "414044000011".into(),
+                "0160" => "416000000000".into(),
 
                 // ── VIN (Mode 09 PID 02) ──────────────────────────────────────
                 "0902" => {
                     let hex: String = self.vin.bytes().map(|b| format!("{b:02X}")).collect();
-                    return format!("490201{hex}");
+                    format!("490201{hex}")
                 }
 
                 // ── Mode 01 live data ─────────────────────────────────────────
                 "010C" => {
                     let v = (self.rpm * 4.0) as u32;
-                    return format!("410C{v:04X}");
+                    format!("410C{v:04X}")
                 }
-                "010D" => return format!("410D{:02X}", self.speed as u32),
-                "0104" => return format!("4104{:02X}", (self.engine_load / 100.0 * 255.0) as u32),
-                "0105" => return format!("4105{:02X}", (self.coolant_temp as i32 + 40) as u32),
-                "0111" => return format!("4111{:02X}", (self.throttle / 100.0 * 255.0) as u32),
-                "010F" => return format!("410F{:02X}", (self.intake_temp as i32 + 40) as u32),
+                "010D" => format!("410D{:02X}", self.speed as u32),
+                "0104" => format!("4104{:02X}", (self.engine_load / 100.0 * 255.0) as u32),
+                "0105" => format!("4105{:02X}", (self.coolant_temp as i32 + 40) as u32),
+                "0111" => format!("4111{:02X}", (self.throttle / 100.0 * 255.0) as u32),
+                "010F" => format!("410F{:02X}", (self.intake_temp as i32 + 40) as u32),
                 "0110" => {
                     let v = (self.maf * 100.0) as u32;
-                    return format!("4110{v:04X}");
+                    format!("4110{v:04X}")
                 }
-                "012F" => return format!("412F{:02X}", (self.fuel_level / 100.0 * 255.0) as u32),
+                "012F" => format!("412F{:02X}", (self.fuel_level / 100.0 * 255.0) as u32),
                 "0106" => {
                     let v = ((self.short_fuel_trim / 100.0 + 1.0) * 128.0) as u32;
-                    return format!("4106{v:02X}");
+                    format!("4106{v:02X}")
                 }
                 "0107" => {
                     let v = ((self.long_fuel_trim / 100.0 + 1.0) * 128.0) as u32;
-                    return format!("4107{v:02X}");
+                    format!("4107{v:02X}")
                 }
-                "010B" => return format!("410B{:02X}", self.intake_pressure as u32),
+                "010B" => format!("410B{:02X}", self.intake_pressure as u32),
                 "010E" => {
                     let v = ((self.timing_advance + 64.0) * 2.0) as u32;
-                    return format!("410E{v:02X}");
+                    format!("410E{v:02X}")
                 }
-                "015C" => return format!("415C{:02X}", (self.oil_temp as i32 + 40) as u32),
+                "015C" => format!("415C{:02X}", (self.oil_temp as i32 + 40) as u32),
                 "0142" => {
                     let v = (self.voltage * 1000.0) as u32;
-                    return format!("4142{v:04X}");
+                    format!("4142{v:04X}")
                 }
-                "0146" => return format!("4146{:02X}", (self.ambient_temp as i32 + 40) as u32),
-                "0133" => return format!("4133{:02X}", self.baro_pressure as u32),
-                "011F" => return format!("411F{:04X}", self.runtime_secs.min(0xFFFF)),
+                "0146" => format!("4146{:02X}", (self.ambient_temp as i32 + 40) as u32),
+                "0133" => format!("4133{:02X}", self.baro_pressure as u32),
+                "011F" => format!("411F{:04X}", self.runtime_secs.min(0xFFFF)),
 
                 // ── Mode 03 / 07: stored and pending DTCs ─────────────────────
                 "03" => {
                     if self.stored_dtcs.is_empty() {
-                        return "430000000000".into();
+                        "430000000000".into()
+                    } else {
+                        format!("43{}", encode_dtcs(&self.stored_dtcs))
                     }
-                    return format!("43{}", encode_dtcs(&self.stored_dtcs));
                 }
                 "07" => {
                     if self.pending_dtcs.is_empty() {
-                        return "470000000000".into();
+                        "470000000000".into()
+                    } else {
+                        format!("47{}", encode_dtcs(&self.pending_dtcs))
                     }
-                    return format!("47{}", encode_dtcs(&self.pending_dtcs));
                 }
 
                 // ── Mode 04: clear DTCs ───────────────────────────────────────
@@ -363,7 +365,7 @@ mod emulator {
                     self.stored_dtcs.clear();
                     self.pending_dtcs.clear();
                     self.mil_on = false;
-                    return "44".into();
+                    "44".into()
                 }
 
                 // ── Mode 02: freeze frame — mirror Mode 01 with Mode 02 prefix
@@ -374,12 +376,13 @@ mod emulator {
                     // r01 = "41XX..." → rewrite as "42XX00..."
                     if r01.len() >= 4 && r01.starts_with("41") {
                         let data = &r01[4..];
-                        return format!("42{pid}00{data}");
+                        format!("42{pid}00{data}")
+                    } else {
+                        "NO DATA".into()
                     }
-                    return "NO DATA".into();
                 }
 
-                _ => return "NO DATA".into(),
+                _ => "NO DATA".into(),
             }
         }
     }
@@ -569,10 +572,7 @@ mod emulator {
                             let mut st = state.lock().unwrap();
                             st.respond(text.trim())
                         };
-                        if ws
-                            .send(tungstenite::Message::Text(response.into()))
-                            .is_err()
-                        {
+                        if ws.send(tungstenite::Message::Text(response)).is_err() {
                             break;
                         }
                     }

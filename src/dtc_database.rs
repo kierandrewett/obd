@@ -216,6 +216,7 @@ impl DtcDatabase {
     /// Search every manufacturer's table for a code when no primary match was found.
     /// Returns `(description, make_name)` from the first match found, excluding
     /// `exclude_make` and the `_generic` bucket (already tried by `lookup`).
+    #[allow(dead_code)] // Public lookup option for callers that want cross-make fallback.
     pub fn lookup_any(&self, exclude_make: &str, code: &str) -> Option<(&str, &str)> {
         let exclude = exclude_make
             .split('(')

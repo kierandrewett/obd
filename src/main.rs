@@ -4,6 +4,7 @@ mod dtc_database;
 mod dtc_descriptions;
 mod elm327;
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(dead_code)] // The binary uses a subset; the library copy exposes parser metadata to tests.
 mod freematics_usb;
 mod gauges;
 mod obd;
