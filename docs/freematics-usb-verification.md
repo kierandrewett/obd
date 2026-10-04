@@ -111,6 +111,14 @@ scan's status and age. The passive USB connection still cannot trigger a scan
 or clear codes. Freeze-frame and manufacturer-specific module scans are not
 provided by this stream.
 
+Each parsed frame also carries the host monotonic time at which its complete
+serial record reached the parser. PID freshness, disconnect warnings, and the
+device-clock-to-host graph anchor use this receive time, not the later UI
+dequeue time. `queued_freematics_frames_keep_their_serial_receive_age` injects
+a two-second reader-queue delay and verifies RPM is still shown stale at its
+real age. This covers software queue latency; it does not measure USB arrival
+latency on a physical Model B.
+
 Parser and app tests cover VIN validation, DTC status/count/code/age semantics,
 unscanned versus successful-empty scans, and passive UI behavior. The repeatable
 serial fixture still covers RPM/voltage dips, actual per-PID ages, partial and
