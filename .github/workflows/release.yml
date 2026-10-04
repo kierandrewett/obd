@@ -237,6 +237,9 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      - name: Reject credentials and private configuration in release assets
+        run: python3 tools/check_release_artifacts.py artifacts
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
