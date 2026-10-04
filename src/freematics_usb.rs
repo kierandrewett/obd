@@ -80,6 +80,9 @@ pub struct FreematicsFrame {
     pub vin: Option<String>,
     pub fields: Vec<TelemetryField>,
     pub corrupt_records: u64,
+    /// Bounded hex-only sample from the first corrupt FT1 record since the
+    /// previous valid frame. Never contains raw serial text in application logs.
+    pub corrupt_sample_hex: Option<String>,
     pub reader_drops: u64,
 }
 
@@ -223,6 +226,7 @@ pub struct FreematicsMeasurement {
 pub struct FreematicsParser {
     partial: Vec<u8>,
     corrupt_records: u64,
+    corrupt_sample_hex: Option<String>,
 }
 
 impl FreematicsParser {
@@ -233,14 +237,21 @@ impl FreematicsParser {
                 let line = std::mem::take(&mut self.partial);
                 if let Some(mut frame) = parse_line(&line) {
                     frame.corrupt_records = self.corrupt_records;
+                    frame.corrupt_sample_hex = self.corrupt_sample_hex.take();
                     frames.push(frame);
                 } else if line.starts_with(FRAME_PREFIX) {
                     self.corrupt_records = self.corrupt_records.saturating_add(1);
+                    if self.corrupt_sample_hex.is_none() {
+                        self.corrupt_sample_hex = Some(corrupt_line_sample(&line));
+                    }
                 }
                 continue;
             }
             self.partial.push(*byte);
             if self.partial.len() > MAX_LINE_BYTES {
+                if self.partial.starts_with(FRAME_PREFIX) && self.corrupt_sample_hex.is_none() {
+                    self.corrupt_sample_hex = Some(corrupt_line_sample(&self.partial));
+                }
                 self.partial.clear();
                 self.corrupt_records = self.corrupt_records.saturating_add(1);
             }
@@ -251,6 +262,57 @@ impl FreematicsParser {
     pub fn corrupt_records(&self) -> u64 {
         self.corrupt_records
     }
+}
+
+fn corrupt_line_sample(line: &[u8]) -> String {
+    let line = line.strip_suffix(b"\r").unwrap_or(line);
+    let fields = std::str::from_utf8(line)
+        .ok()
+        .and_then(|text| text.split_once('|').map(|(_, payload)| payload))
+        .and_then(|payload| payload.split_once('#').map(|(_, data)| data))
+        .and_then(|data| {
+            data.split_once('*')
+                .map_or(Some(data), |(data, _)| Some(data))
+        });
+
+    if let Some(fields) = fields {
+        for field in fields.split(',') {
+            let valid = field.split_once(':').is_some_and(|(pid, values)| {
+                u16::from_str_radix(pid, 16).is_ok()
+                    && !values.is_empty()
+                    && values
+                        .split(';')
+                        .all(|value| value.parse::<f64>().is_ok_and(|number| number.is_finite()))
+            });
+            if !valid {
+                return format!(
+                    "field_len={} field_hex={}",
+                    field.len(),
+                    bounded_hex(field.as_bytes())
+                );
+            }
+        }
+    }
+
+    let edge = 12;
+    let prefix = &line[..line.len().min(edge)];
+    let suffix = &line[line.len().saturating_sub(edge)..];
+    format!(
+        "record_len={} edge_hex={}..{}",
+        line.len(),
+        bounded_hex(prefix),
+        bounded_hex(suffix)
+    )
+}
+
+fn bounded_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut output = String::with_capacity(bytes.len().min(32) * 2);
+    for byte in bytes.iter().take(32) {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0F) as usize] as char);
+    }
+    output
 }
 
 pub fn parse_line(line: &[u8]) -> Option<FreematicsFrame> {
@@ -339,6 +401,7 @@ pub fn parse_line(line: &[u8]) -> Option<FreematicsFrame> {
         vin,
         fields,
         corrupt_records: 0,
+        corrupt_sample_hex: None,
         reader_drops: 0,
     })
 }
@@ -639,6 +702,31 @@ mod tests {
         let mut parser = FreematicsParser::default();
         assert!(parser.feed(line.as_bytes()).is_empty());
         assert_eq!(parser.corrupt_records(), 1);
+    }
+
+    #[test]
+    fn carries_one_bounded_corrupt_field_sample_to_the_next_valid_frame() {
+        let payload = "ABCDEF#0:1250,10C:999,40C:5,BADFIELD";
+        let checksum = payload
+            .bytes()
+            .fold(0u8, |sum, byte| sum.wrapping_add(byte));
+        let malformed = format!("@FT1,42,1250,1,1790966401250,0,0C|{payload}*{checksum:02X}\n");
+        let mut parser = FreematicsParser::default();
+        assert!(parser.feed(malformed.as_bytes()).is_empty());
+
+        let frame = parser
+            .feed(wire_record(1500, 650.0, 20, "0C").as_bytes())
+            .remove(0);
+        assert_eq!(frame.corrupt_records, 1);
+        assert_eq!(
+            frame.corrupt_sample_hex.as_deref(),
+            Some("field_len=8 field_hex=4241444649454C44")
+        );
+
+        let next = parser
+            .feed(wire_record(1750, 640.0, 20, "0C").as_bytes())
+            .remove(0);
+        assert_eq!(next.corrupt_sample_hex, None);
     }
 
     #[test]

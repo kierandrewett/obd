@@ -898,8 +898,9 @@ impl ObdApp {
         if frame.corrupt_records > previous_corrupt_records {
             self.freematics_corrupt_records = frame.corrupt_records;
             self.add_log(&format!(
-                "[FREEMATICS_USB_CORRUPT] cumulative={}",
-                frame.corrupt_records
+                "[FREEMATICS_USB_CORRUPT] cumulative={} sample={}",
+                frame.corrupt_records,
+                frame.corrupt_sample_hex.as_deref().unwrap_or("unavailable")
             ));
         }
         if frame.reader_drops > previous_reader_drops {
@@ -2709,6 +2710,7 @@ mod adapter_ui_tests {
             vin: Some("1HGCM82633A004352".into()),
             fields,
             corrupt_records: 0,
+            corrupt_sample_hex: None,
             reader_drops: 0,
         };
 
