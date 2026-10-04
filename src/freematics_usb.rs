@@ -652,6 +652,7 @@ mod tests {
         assert_eq!(frame.capture_ms, 1250);
         assert_eq!(frame.corrupt_records, 0);
         assert_eq!(device.baud_rate(), 460_800);
+        assert_eq!(device.port.baud_rate().unwrap(), 460_800);
     }
 
     #[cfg(target_os = "linux")]
@@ -665,6 +666,7 @@ mod tests {
         device.opened_at = Instant::now() - LEGACY_BAUD_FALLBACK_DELAY;
         assert!(device.read_frames().unwrap().is_empty());
         assert_eq!(device.baud_rate(), LEGACY_USB_BAUD);
+        assert_eq!(device.port.baud_rate().unwrap(), LEGACY_USB_BAUD);
         assert!(device.legacy_baud_attempted);
 
         master
