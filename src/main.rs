@@ -285,7 +285,7 @@ fn obd_worker(
                         Ok((device, initial_frames)) => {
                             let info = elm327::ConnectionInfo {
                                 port: device.port_name(),
-                                baud: 115_200,
+                                baud: device.baud_rate(),
                                 protocol: "Freematics Telemetry v1".into(),
                                 elm_version: "Passive TeleLogger USB stream".into(),
                                 voltage: None,

@@ -415,6 +415,7 @@ pub fn parse_line(line: &[u8]) -> Option<FreematicsFrame> {
 pub struct FreematicsUsb {
     port: Box<dyn serialport::SerialPort>,
     parser: FreematicsParser,
+    baud_rate: u32,
     opened_at: Instant,
     valid_frame_seen: bool,
     legacy_baud_attempted: bool,
@@ -441,6 +442,7 @@ impl FreematicsUsb {
         Ok(Self {
             port,
             parser: FreematicsParser::default(),
+            baud_rate: USB_BAUD,
             opened_at: Instant::now(),
             valid_frame_seen: false,
             legacy_baud_attempted: false,
@@ -451,6 +453,10 @@ impl FreematicsUsb {
         self.port
             .name()
             .unwrap_or_else(|| "Freematics USB".to_string())
+    }
+
+    pub fn baud_rate(&self) -> u32 {
+        self.baud_rate
     }
 
     pub fn auto_connect() -> Result<(Self, Vec<FreematicsFrame>), String> {
@@ -533,6 +539,7 @@ impl FreematicsUsb {
             self.port
                 .set_baud_rate(LEGACY_USB_BAUD)
                 .map_err(|error| format!("Cannot try legacy Freematics USB baud: {error}"))?;
+            self.baud_rate = LEGACY_USB_BAUD;
             self.parser = FreematicsParser::default();
             self.legacy_baud_attempted = true;
         }
