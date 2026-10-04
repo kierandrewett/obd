@@ -232,6 +232,14 @@ pub struct ObdApp {
     clear_dtc_confirm: bool,
     #[cfg(not(target_arch = "wasm32"))]
     freematics_dtcs: [FreematicsDtcScan; 3],
+    #[cfg(not(target_arch = "wasm32"))]
+    freematics_freeze_data: Vec<crate::freematics_usb::FreematicsMeasurement>,
+    #[cfg(not(target_arch = "wasm32"))]
+    freematics_freeze_status: Option<u32>,
+    #[cfg(not(target_arch = "wasm32"))]
+    freematics_freeze_read_age_ms: Option<u32>,
+    #[cfg(not(target_arch = "wasm32"))]
+    freematics_freeze_trigger_dtc: Option<u32>,
 
     // Freeze frame
     freeze_data: Vec<(String, ObdValue, String)>,
@@ -638,6 +646,14 @@ impl ObdApp {
             clear_dtc_confirm: false,
             #[cfg(not(target_arch = "wasm32"))]
             freematics_dtcs: std::array::from_fn(|_| FreematicsDtcScan::default()),
+            #[cfg(not(target_arch = "wasm32"))]
+            freematics_freeze_data: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            freematics_freeze_status: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            freematics_freeze_read_age_ms: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            freematics_freeze_trigger_dtc: None,
             freeze_data: Vec::new(),
             freeze_frame_read: false,
             vin: None,
@@ -721,6 +737,10 @@ impl ObdApp {
                             self.freematics_corrupt_records = 0;
                             self.freematics_dtcs =
                                 std::array::from_fn(|_| FreematicsDtcScan::default());
+                            self.freematics_freeze_data.clear();
+                            self.freematics_freeze_status = None;
+                            self.freematics_freeze_read_age_ms = None;
+                            self.freematics_freeze_trigger_dtc = None;
                         }
                         self.stored_dtcs.clear();
                         self.pending_dtcs.clear();
@@ -964,6 +984,21 @@ impl ObdApp {
         self.freematics_dropped_records = frame.dropped_records;
         self.freematics_reader_drops = frame.reader_drops;
         self.freematics_acquisition_health = frame.acquisition_health();
+        let next_freeze_status = frame.freeze_frame_status();
+        let next_freeze_trigger = frame.freeze_frame_trigger_dtc();
+        let new_freeze_capture = next_freeze_status == Some(3)
+            && (self.freematics_freeze_status != Some(3)
+                || self.freematics_freeze_trigger_dtc != next_freeze_trigger);
+        self.freematics_freeze_status = next_freeze_status;
+        self.freematics_freeze_read_age_ms = frame.freeze_frame_read_age_ms();
+        self.freematics_freeze_trigger_dtc = next_freeze_trigger;
+        let freeze_data = frame.freeze_frame_measurements();
+        if matches!(self.freematics_freeze_status, Some(0 | 2)) || new_freeze_capture {
+            self.freematics_freeze_data.clear();
+        }
+        if !freeze_data.is_empty() {
+            self.freematics_freeze_data = freeze_data;
+        }
         self.supported_pids = frame
             .supported_pids
             .as_ref()
@@ -2536,10 +2571,7 @@ impl ObdApp {
         }
 
         if self.is_freematics_usb() {
-            ui.label(
-                RichText::new("Freeze-frame requests are unavailable on this connection.")
-                    .color(Color32::from_gray(150)),
-            );
+            self.show_freematics_freeze_frame(ui);
             return;
         }
 
@@ -2604,6 +2636,87 @@ impl ObdApp {
                     });
             });
         }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn show_freematics_freeze_frame(&self, ui: &mut egui::Ui) {
+        if self.freematics_freeze_data.is_empty() {
+            let message = match self.freematics_freeze_status {
+                Some(0) => "No stored DTC freeze frame has been captured.",
+                Some(2) => "The ECU did not provide supported Mode 02 frame-0 values.",
+                Some(3) => "Reading the ECU's stored Mode 02 frame-0 values…",
+                Some(_) => "Waiting for passive freeze-frame telemetry from Freematics.",
+                None => "Waiting for passive freeze-frame telemetry from Freematics.",
+            };
+            ui.label(RichText::new(message).color(Color32::from_gray(140)));
+            return;
+        }
+
+        ui.horizontal(|ui| {
+            ui.strong("ECU Mode 02 frame 0");
+            if self.freematics_freeze_status == Some(3) {
+                ui.label(
+                    RichText::new("Capture in progress · partial values")
+                        .color(Color32::from_rgb(220, 180, 80)),
+                );
+            }
+            ui.label("Original fault-time timestamp is not available from this ECU response.");
+            match self.freematics_freeze_read_age_ms {
+                Some(age) => {
+                    ui.label(format!("Device read age: {age} ms"));
+                }
+                None => {
+                    ui.label(
+                        RichText::new("Device read age unavailable")
+                            .color(Color32::from_rgb(220, 180, 80)),
+                    );
+                }
+            }
+            if let Some(dtc) = self.freematics_freeze_trigger_dtc {
+                ui.label(format!("Trigger DTC raw: 0x{dtc:04X}"));
+            }
+        });
+        ui.add_space(8.0);
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            egui_extras::TableBuilder::new(ui)
+                .striped(true)
+                .column(egui_extras::Column::exact(64.0))
+                .column(egui_extras::Column::remainder().at_least(180.0))
+                .column(egui_extras::Column::exact(120.0))
+                .column(egui_extras::Column::exact(60.0))
+                .header(20.0, |mut header| {
+                    header.col(|ui| {
+                        ui.strong("PID");
+                    });
+                    header.col(|ui| {
+                        ui.strong("Sensor");
+                    });
+                    header.col(|ui| {
+                        ui.strong("Value");
+                    });
+                    header.col(|ui| {
+                        ui.strong("Unit");
+                    });
+                })
+                .body(|mut body| {
+                    for measurement in &self.freematics_freeze_data {
+                        body.row(20.0, |mut row| {
+                            row.col(|ui| {
+                                ui.label(&measurement.cmd[2..]);
+                            });
+                            row.col(|ui| {
+                                ui.label(&measurement.name);
+                            });
+                            row.col(|ui| {
+                                ui.label(RichText::new(format!("{}", measurement.value)).strong());
+                            });
+                            row.col(|ui| {
+                                ui.label(&measurement.unit);
+                            });
+                        });
+                    }
+                });
+        });
     }
 
     fn show_vehicle_info(&mut self, ui: &mut egui::Ui) {
@@ -3076,6 +3189,10 @@ mod adapter_ui_tests {
             (0x340, 0.0),
             (0x350, 1.0),
             (0x362, 500.0),
+            (0x20C, 812.5),
+            (0x363, 2_400.0),
+            (0x364, 1.0),
+            (0x365, 1281.0),
         ]
         .into_iter()
         .map(|(pid, value)| crate::freematics_usb::TelemetryField {
@@ -3099,7 +3216,7 @@ mod adapter_ui_tests {
             reader_drops: 0,
         };
 
-        app.apply_freematics_frame(frame);
+        app.apply_freematics_frame(frame.clone());
         assert_eq!(app.freematics_capture_utc_ms, Some(1_790_966_400_000));
         assert_eq!(app.vin.as_deref(), Some("1HGCM82633A004352"));
         assert_eq!(app.freematics_calibration_id.as_deref(), Some("CAL-123"));
@@ -3116,6 +3233,12 @@ mod adapter_ui_tests {
         );
         assert_eq!(app.freematics_dtcs[1].count, Some(0));
         assert_eq!(app.freematics_dtcs[1].status, Some(1));
+        assert_eq!(app.freematics_freeze_data.len(), 1);
+        assert_eq!(app.freematics_freeze_data[0].cmd, "020C");
+        assert_eq!(app.freematics_freeze_data[0].value, 812.5);
+        assert_eq!(app.freematics_freeze_data[0].age_ms, Some(2_400));
+        assert_eq!(app.freematics_freeze_status, Some(1));
+        assert_eq!(app.freematics_freeze_trigger_dtc, Some(1281));
         assert!(
             command_rx.try_recv().is_err(),
             "passive telemetry must not send diagnostic commands"
@@ -3138,6 +3261,90 @@ mod adapter_ui_tests {
             command_rx.try_recv().is_err(),
             "drawing cached DTCs must remain passive"
         );
+        let output = context.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.show_freeze_frame(ui));
+            },
+        );
+        let rendered = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("ECU Mode 02 frame 0"));
+        assert!(rendered.contains("Device read age: 2400 ms"));
+        assert!(rendered.contains("Original fault-time timestamp is not available"));
+        assert!(rendered.contains("Engine RPM"));
+        assert!(rendered.contains("812.5"));
+        assert!(!rendered.contains("requests are unavailable"));
+        assert!(
+            command_rx.try_recv().is_err(),
+            "rendering passive freeze-frame telemetry must not send diagnostics"
+        );
+
+        let mut next_capture = frame.clone();
+        next_capture.capture_ms += 1;
+        next_capture.fields.retain(|field| {
+            (field.pid < 0x200 || field.pid > 0x2ff) && !(0x363..=0x365).contains(&field.pid)
+        });
+        next_capture.fields.extend([
+            crate::freematics_usb::TelemetryField {
+                pid: 0x364,
+                values: vec![3.0],
+            },
+            crate::freematics_usb::TelemetryField {
+                pid: 0x365,
+                values: vec![1282.0],
+            },
+        ]);
+        app.apply_freematics_frame(next_capture.clone());
+        assert!(app.freematics_freeze_data.is_empty());
+        assert_eq!(app.freematics_freeze_status, Some(3));
+
+        next_capture.capture_ms += 1;
+        next_capture
+            .fields
+            .push(crate::freematics_usb::TelemetryField {
+                pid: 0x20d,
+                values: vec![7.0],
+            });
+        app.apply_freematics_frame(next_capture);
+        assert_eq!(app.freematics_freeze_data.len(), 1);
+        assert_eq!(app.freematics_freeze_data[0].cmd, "020D");
+        let partial_output = context.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.show_freeze_frame(ui));
+            },
+        );
+        let partial_text = partial_output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(partial_text.contains("Capture in progress · partial values"));
+        assert!(partial_text.contains("Vehicle Speed"));
         let _ = context.run(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(

@@ -219,6 +219,51 @@ impl FreematicsFrame {
         output
     }
 
+    /// Return passive Mode 02 frame-0 values carried alongside live telemetry.
+    /// Freematics encodes a Mode 01 PID `p` as field `0x200 + p`; `0x363`
+    /// carries elapsed time since the logger first read this ECU snapshot, not
+    /// the ECU's unavailable fault-time capture age.
+    /// These values are already decoded by firmware, so this method never
+    /// issues a diagnostic request.
+    pub fn freeze_frame_measurements(&self) -> Vec<FreematicsMeasurement> {
+        let definitions = obd::mode01_pids();
+        let age_ms = self.freeze_frame_read_age_ms();
+        self.fields
+            .iter()
+            .filter_map(|field| {
+                let pid = field.pid.checked_sub(0x200)?;
+                if pid > u8::MAX as u16 || field.values.is_empty() {
+                    return None;
+                }
+                let pid = pid as u8;
+                let cmd = format!("01{pid:02X}");
+                let definition = definitions.iter().find(|item| item.cmd == cmd)?;
+                Some(FreematicsMeasurement {
+                    cmd: format!("02{pid:02X}"),
+                    name: definition.description.to_string(),
+                    unit: definition.unit.to_string(),
+                    value: field.values[0],
+                    age_ms,
+                    // The Mode 01 support bitmap says nothing about whether
+                    // this ECU exposes the PID in Mode 02 frame 0.
+                    supported: None,
+                })
+            })
+            .collect()
+    }
+
+    pub fn freeze_frame_status(&self) -> Option<u32> {
+        self.field_u32(0x364)
+    }
+
+    pub fn freeze_frame_read_age_ms(&self) -> Option<u32> {
+        self.field_u32(0x363)
+    }
+
+    pub fn freeze_frame_trigger_dtc(&self) -> Option<u32> {
+        self.field_u32(0x365)
+    }
+
     pub fn model_b_supply_voltage(&self) -> Option<(f64, Option<u32>)> {
         let value = self
             .fields
@@ -915,6 +960,41 @@ mod tests {
         assert_eq!(measurements[0].value, 123456.7);
         assert_eq!(measurements[0].age_ms, Some(500));
         assert_eq!(measurements[0].supported, Some(true));
+    }
+
+    #[test]
+    fn decodes_passive_mode02_frame_zero_values_and_snapshot_age() {
+        let payload = "ABCDEF#0:100,20C:812.5,20D:0,363:2400,10C:790,260:1";
+        let checksum = payload
+            .bytes()
+            .fold(0u8, |sum, byte| sum.wrapping_add(byte));
+        let line = format!("@FT1,42,100,1,1790966400000,0,0C,0D|{payload}*{checksum:02X}");
+        let frame = parse_line(line.as_bytes()).unwrap();
+        let measurements = frame.freeze_frame_measurements();
+
+        assert_eq!(measurements.len(), 2, "only known Mode 01 PIDs are mapped");
+        assert_eq!(measurements[0].cmd, "020C");
+        assert_eq!(measurements[0].name, "Engine RPM");
+        assert_eq!(measurements[0].value, 812.5);
+        assert_eq!(measurements[0].unit, "RPM");
+        assert_eq!(measurements[0].age_ms, Some(2400));
+        assert_eq!(measurements[0].supported, None);
+        assert_eq!(measurements[1].cmd, "020D");
+        assert_eq!(measurements[1].value, 0.0);
+        assert_eq!(measurements[1].age_ms, Some(2400));
+        assert_eq!(measurements[1].supported, None);
+    }
+
+    #[test]
+    fn passive_freeze_frame_age_is_optional_and_never_falls_back_to_live_values() {
+        let payload = "ABCDEF#0:100,10C:790,363:1";
+        let checksum = payload
+            .bytes()
+            .fold(0u8, |sum, byte| sum.wrapping_add(byte));
+        let line = format!("@FT1,42,100,0,0,0,0C|{payload}*{checksum:02X}");
+        let frame = parse_line(line.as_bytes()).unwrap();
+
+        assert!(frame.freeze_frame_measurements().is_empty());
     }
 
     #[test]
