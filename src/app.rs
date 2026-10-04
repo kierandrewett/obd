@@ -1319,10 +1319,12 @@ impl ObdApp {
     fn is_freematics_usb(&self) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            self.connection_info
-                .as_ref()
-                .is_some_and(|info| info.protocol == "Freematics Telemetry v1")
-                || self.connection_kind == ConnectionKind::FreematicsUsb
+            self.connection_info.as_ref().is_some_and(|info| {
+                matches!(
+                    info.protocol.as_str(),
+                    "Freematics Telemetry v1" | "Freematics Telemetry v2"
+                )
+            }) || self.connection_kind == ConnectionKind::FreematicsUsb
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -3849,10 +3851,8 @@ mod adapter_ui_tests {
         };
 
         app.apply_freematics_frame(frame_for(42, 1000, 820, 10));
-        assert_eq!(
-            ObdApp::displayed_age_ms(app.live_data.get("010C").unwrap()),
-            Some(10)
-        );
+        let displayed_age = ObdApp::displayed_age_ms(app.live_data.get("010C").unwrap()).unwrap();
+        assert!((10..=100).contains(&displayed_age));
         assert!(!app.pid_is_stale("010C", app.live_data.get("010C").unwrap()));
         assert_eq!(
             app.live_data

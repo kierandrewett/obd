@@ -100,7 +100,7 @@ connected to the car and laptop.
 
 ## Current USB and diagnostics changes
 
-The firmware now publishes each FT1 telemetry record as one contiguous serial
+The firmware now publishes each FT2 telemetry record as one contiguous serial
 write. The Model B USB queue is bounded and coalesces queued old snapshots to
 the newest waiting sample while preserving any record already in flight. Every
 discard increments the cumulative USB drop counter in the next frame. This is
@@ -113,7 +113,7 @@ records, stale-backlog dropping, sequence/checksum integrity, and concurrent
 single-producer/single-consumer stress. It is a host simulation, not a
 measurement of vehicle sampling or upload latency under a saturated UART.
 
-FT1's supported-PID header can append validated optional `;vin=`, `;cal=`,
+FT2's supported-PID header can append validated optional `;vin=`, `;cal=`,
 `;ecu=`, and `;raw=` metadata. The dashboard shows device-reported identity
 and supported Mode 01 inventory. The raw extension preserves full response
 bytes for PIDs 01, 02, 03, 14–1B, 24–2B, and 34–3B from the firmware's existing
@@ -137,6 +137,14 @@ dequeue time. `queued_freematics_frames_keep_their_serial_receive_age` injects
 a two-second reader-queue delay and verifies RPM is still shown stale at its
 real age. This covers software queue latency; it does not measure USB arrival
 latency on a physical Model B.
+
+FT2 replaces FT1's payload-only additive checksum with CRC-32/ISO-HDLC over
+the complete ASCII record body from `@FT2` through the serialized sample. The
+capture clock, validity flag, drop count, support list, identity/raw metadata,
+and readings/ages are now protected together. The parser retains FT1 support
+for older firmware. The synthetic serial verification scenarios are still
+legacy FT1 fixtures unless explicitly noted; they validate backward
+compatibility, not a physical FT2 Model B stream.
 
 Parser and app tests cover raw Mode 01 metadata widths and decoding, VIN
 validation, DTC status/count/code/age semantics,

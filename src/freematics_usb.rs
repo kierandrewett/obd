@@ -4,7 +4,9 @@ use std::io::{self, Read};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-const FRAME_PREFIX: &[u8] = b"@FT1,";
+const FRAME_V1_PREFIX: &[u8] = b"@FT1,";
+const FRAME_V2_PREFIX: &[u8] = b"@FT2,";
+const FRAME_FAMILY_PREFIX: &[u8] = b"@FT";
 const MAX_LINE_BYTES: usize = 16 * 1024;
 const USB_BAUD: u32 = 460_800;
 const LEGACY_USB_BAUD: u32 = 115_200;
@@ -55,7 +57,7 @@ pub enum FreematicsDtcAvailability {
     UnknownStatus,
 }
 
-/// One mode-specific DTC scan decoded from an FT1 frame.
+/// One mode-specific DTC scan decoded from a Freematics telemetry frame.
 ///
 /// `count` and `code_slots` are optional because the firmware only emits them
 /// after the first scan. Slots retain the ECU's raw 16-bit DTC values; unused
@@ -97,7 +99,7 @@ pub struct FreematicsFrame {
     pub ecu_name: Option<String>,
     pub fields: Vec<TelemetryField>,
     pub corrupt_records: u64,
-    /// Bounded hex-only sample from the first corrupt FT1 record since the
+    /// Bounded hex-only sample from the first corrupt telemetry record since the
     /// previous valid frame. Never contains raw serial text in application logs.
     pub corrupt_sample_hex: Option<String>,
     pub reader_drops: u64,
@@ -402,6 +404,7 @@ pub struct FreematicsParser {
     partial: Vec<u8>,
     corrupt_records: u64,
     corrupt_sample_hex: Option<String>,
+    discarding_oversize: bool,
 }
 
 impl FreematicsParser {
@@ -409,12 +412,17 @@ impl FreematicsParser {
         let mut frames = Vec::new();
         for byte in bytes {
             if *byte == b'\n' {
+                if self.discarding_oversize {
+                    self.partial.clear();
+                    self.discarding_oversize = false;
+                    continue;
+                }
                 let line = std::mem::take(&mut self.partial);
                 if let Some(mut frame) = parse_line(&line) {
                     frame.corrupt_records = self.corrupt_records;
                     frame.corrupt_sample_hex = self.corrupt_sample_hex.take();
                     frames.push(frame);
-                } else if line.starts_with(FRAME_PREFIX) {
+                } else if is_telemetry_prefix(&line) {
                     self.corrupt_records = self.corrupt_records.saturating_add(1);
                     if self.corrupt_sample_hex.is_none() {
                         self.corrupt_sample_hex = Some(corrupt_line_sample(&line));
@@ -422,13 +430,46 @@ impl FreematicsParser {
                 }
                 continue;
             }
-            self.partial.push(*byte);
+            let mut byte_appended = false;
+            if self.discarding_oversize {
+                self.partial.push(*byte);
+                byte_appended = true;
+                if let Some(offset) = frame_prefix_offset(&self.partial, 0) {
+                    self.partial.drain(..offset);
+                    self.discarding_oversize = false;
+                } else {
+                    // Keep only enough trailing bytes to recognize a prefix
+                    // split across serial reads without retaining an unbounded
+                    // corrupt line.
+                    const PREFIX_TAIL: usize = FRAME_V2_PREFIX.len() - 1;
+                    if self.partial.len() > PREFIX_TAIL {
+                        self.partial.drain(..self.partial.len() - PREFIX_TAIL);
+                    }
+                    continue;
+                }
+            }
+            if !byte_appended {
+                self.partial.push(*byte);
+            }
+            if is_telemetry_prefix(&self.partial) {
+                if let Some(offset) = next_frame_offset(&self.partial) {
+                    self.corrupt_records = self.corrupt_records.saturating_add(1);
+                    if self.corrupt_sample_hex.is_none() {
+                        self.corrupt_sample_hex = Some(corrupt_line_sample(&self.partial));
+                    }
+                    self.partial.drain(..offset);
+                }
+            }
             if self.partial.len() > MAX_LINE_BYTES {
-                if self.partial.starts_with(FRAME_PREFIX) && self.corrupt_sample_hex.is_none() {
+                if is_telemetry_prefix(&self.partial) && self.corrupt_sample_hex.is_none() {
                     self.corrupt_sample_hex = Some(corrupt_line_sample(&self.partial));
                 }
-                self.partial.clear();
-                self.corrupt_records = self.corrupt_records.saturating_add(1);
+                if is_telemetry_prefix(&self.partial) {
+                    self.corrupt_records = self.corrupt_records.saturating_add(1);
+                }
+                const PREFIX_TAIL: usize = FRAME_V2_PREFIX.len() - 1;
+                self.partial.drain(..self.partial.len() - PREFIX_TAIL);
+                self.discarding_oversize = true;
             }
         }
         frames
@@ -437,6 +478,21 @@ impl FreematicsParser {
     pub fn corrupt_records(&self) -> u64 {
         self.corrupt_records
     }
+}
+
+fn is_telemetry_prefix(bytes: &[u8]) -> bool {
+    bytes.starts_with(FRAME_FAMILY_PREFIX)
+}
+
+fn next_frame_offset(bytes: &[u8]) -> Option<usize> {
+    frame_prefix_offset(bytes, 1)
+}
+
+fn frame_prefix_offset(bytes: &[u8], start: usize) -> Option<usize> {
+    (start..bytes.len()).find(|&offset| {
+        let remaining = &bytes[offset..];
+        remaining.starts_with(FRAME_V1_PREFIX) || remaining.starts_with(FRAME_V2_PREFIX)
+    })
 }
 
 fn corrupt_line_sample(line: &[u8]) -> String {
@@ -493,12 +549,18 @@ fn bounded_hex(bytes: &[u8]) -> String {
 pub fn parse_line(line: &[u8]) -> Option<FreematicsFrame> {
     let reader_received_at = Instant::now();
     let line = line.strip_suffix(b"\r").unwrap_or(line);
-    if !line.starts_with(FRAME_PREFIX) {
+    let version2 = line.starts_with(FRAME_V2_PREFIX);
+    if !version2 && !line.starts_with(FRAME_V1_PREFIX) {
         return None;
     }
     let line = std::str::from_utf8(line).ok()?;
     let (header, payload) = line.split_once('|')?;
-    let mut metadata = header.strip_prefix("@FT1,")?.splitn(6, ',');
+    let header = if version2 {
+        header.strip_prefix("@FT2,")?
+    } else {
+        header.strip_prefix("@FT1,")?
+    };
+    let mut metadata = header.splitn(6, ',');
     let boot_id = metadata.next()?.parse().ok()?;
     let capture_ms = metadata.next()?.parse().ok()?;
     let utc_valid = match metadata.next()? {
@@ -575,14 +637,27 @@ pub fn parse_line(line: &[u8]) -> Option<FreematicsFrame> {
         return None;
     }
     let (data, checksum) = body.rsplit_once('*')?;
-    let checksum = u8::from_str_radix(checksum, 16).ok()?;
-    let checksum_input = payload.split_once('*')?.0.as_bytes();
-    if checksum_input
-        .iter()
-        .fold(0u8, |sum, byte| sum.wrapping_add(*byte))
-        != checksum
-    {
-        return None;
+    if version2 {
+        if checksum.len() != 8 || !checksum.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return None;
+        }
+        let checksum = u32::from_str_radix(checksum, 16).ok()?;
+        let checksum_end = line.rfind('*')?;
+        if checksum_end <= line.find('|')?
+            || crc32_iso_hdlc(&line.as_bytes()[..checksum_end]) != checksum
+        {
+            return None;
+        }
+    } else {
+        let checksum = u8::from_str_radix(checksum, 16).ok()?;
+        let checksum_input = payload.split_once('*')?.0.as_bytes();
+        if checksum_input
+            .iter()
+            .fold(0u8, |sum, byte| sum.wrapping_add(*byte))
+            != checksum
+        {
+            return None;
+        }
     }
 
     let fields = data
@@ -621,6 +696,17 @@ pub fn parse_line(line: &[u8]) -> Option<FreematicsFrame> {
         corrupt_sample_hex: None,
         reader_drops: 0,
     })
+}
+
+fn crc32_iso_hdlc(bytes: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for byte in bytes {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0xEDB8_8320 & (0u32.wrapping_sub(crc & 1)));
+        }
+    }
+    !crc
 }
 
 fn raw_mode01_widths() -> &'static HashMap<u8, usize> {
@@ -899,7 +985,7 @@ mod tests {
                 return frame;
             }
         }
-        panic!("timed out waiting for a complete FT1 frame over PTY");
+        panic!("timed out waiting for a complete FT1/FT2 frame over PTY");
     }
 
     #[cfg(target_os = "linux")]
@@ -990,6 +1076,107 @@ mod tests {
             .bytes()
             .fold(0u8, |sum, byte| sum.wrapping_add(byte));
         format!("@FT1,42,{capture_ms},1,1790966400000,0,{supported}|{payload}*{checksum:02X}\n")
+    }
+
+    fn wire_record_v2(header: &str, payload: &str) -> String {
+        let body = format!("@FT2,{header}|{payload}");
+        format!("{body}*{:08X}", crc32_iso_hdlc(body.as_bytes()))
+    }
+
+    #[test]
+    fn crc32_matches_iso_hdlc_check_vector() {
+        assert_eq!(crc32_iso_hdlc(b"123456789"), 0xCBF4_3926);
+    }
+
+    #[test]
+    fn ft2_crc_covers_the_envelope_and_serialized_sample() {
+        let payload = "ABCDEF#0:1200,10C:718.5,40C:125,24:1375";
+        let record = wire_record_v2(
+            "42,1200,1,1790966400000,7,0C,0D;vin=W0L0SDL68D4050841;raw=0C:02CE",
+            payload,
+        );
+        let frame = parse_line(record.as_bytes()).expect("valid FT2 record");
+        assert_eq!(frame.boot_id, 42);
+        assert_eq!(frame.capture_ms, 1200);
+        assert_eq!(frame.dropped_records, 7);
+        assert_eq!(frame.vin.as_deref(), Some("W0L0SDL68D4050841"));
+
+        // Every metadata region is covered, not just the serialized fields.
+        for (marker, relative_offset, replacement) in [
+            ("42,", 0, b'5'),
+            ("1200,", 0, b'2'),
+            ("1,179", 2, b'2'),
+            ("1790966400000", 0, b'2'),
+            ("7,", 0, b'8'),
+            ("0C,0D", 0, b'1'),
+            ("vin=W", 4, b'X'),
+            ("02CE", 0, b'1'),
+            ("718.5", 0, b'8'),
+        ] {
+            let mut corrupted = record.clone();
+            let offset = corrupted.find(marker).expect("test mutation marker") + relative_offset;
+            unsafe {
+                corrupted.as_bytes_mut()[offset] = replacement;
+            }
+            assert!(
+                parse_line(corrupted.as_bytes()).is_none(),
+                "accepted mutation at {marker}"
+            );
+        }
+        let mut malformed_crc = record.clone();
+        let crc_offset = malformed_crc.rfind('*').unwrap() + 1;
+        malformed_crc.replace_range(crc_offset..crc_offset + 1, "G");
+        assert!(parse_line(malformed_crc.as_bytes()).is_none());
+        assert!(parse_line(record[..crc_offset - 1].as_bytes()).is_none());
+        let mut extra_crc = record.clone();
+        extra_crc.push('0');
+        assert!(parse_line(extra_crc.as_bytes()).is_none());
+
+        let mut crlf_parser = FreematicsParser::default();
+        let frames = crlf_parser.feed(format!("{record}\r\n").as_bytes());
+        assert_eq!(frames.len(), 1);
+    }
+
+    #[test]
+    fn parser_counts_a_corrupt_ft2_record_and_recovers_at_next_line() {
+        let mut corrupt = wire_record_v2("42,1200,0,0,0,|", "ABCDEF#0:1200,10C:700");
+        let offset = corrupt.find("42,").unwrap();
+        unsafe {
+            corrupt.as_bytes_mut()[offset] = b'9';
+        }
+        let valid = wire_record_v2("42,1450,0,0,0,|", "ABCDEF#0:1450,10C:715");
+        let mut parser = FreematicsParser::default();
+        let mut received = Vec::new();
+        for byte in format!("{corrupt}{valid}\n").as_bytes() {
+            received.extend(parser.feed(&[*byte]));
+        }
+        assert_eq!(received.len(), 1);
+        assert_eq!(received[0].capture_ms, 1450);
+        assert_eq!(received[0].corrupt_records, 1);
+    }
+
+    #[test]
+    fn parser_resynchronizes_after_oversized_frame_without_newline() {
+        let valid = wire_record_v2("42,1450,0,0,0,|", "ABCDEF#0:1450,10C:715");
+        let input = format!("@FT2,damaged{}{}\n", "x".repeat(MAX_LINE_BYTES + 8), valid);
+        let mut parser = FreematicsParser::default();
+        let mut frames = Vec::new();
+        for chunk in input.as_bytes().chunks(17) {
+            frames.extend(parser.feed(chunk));
+        }
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].capture_ms, 1450);
+        assert_eq!(frames[0].corrupt_records, 1);
+    }
+
+    #[test]
+    fn unsupported_future_telemetry_version_is_counted_as_corrupt() {
+        let valid = wire_record_v2("42,1450,0,0,0,|", "ABCDEF#0:1450,10C:715");
+        let mut parser = FreematicsParser::default();
+        let frames = parser.feed(format!("@FT3,unsupported\n{valid}\n").as_bytes());
+        assert_eq!(frames.len(), 1);
+        assert_eq!(parser.corrupt_records(), 1);
+        assert_eq!(frames[0].corrupt_records, 1);
     }
 
     fn dtc_wire_frame(fields: &str) -> FreematicsFrame {
@@ -1519,6 +1706,27 @@ mod tests {
             frames[3].boot_id, 99,
             "changed boot ID marks a device restart"
         );
+        assert_eq!(frames[3].dropped_records, 2);
+    }
+
+    #[test]
+    fn simulated_ft2_shudder_scenario_preserves_time_voltage_and_restart() {
+        let traffic = include_bytes!("../tests/fixtures/freematics_ft2_shudder_scenario.txt");
+        let mut parser = FreematicsParser::default();
+        let mut frames = Vec::new();
+        for fragment in traffic.chunks(13) {
+            frames.extend(parser.feed(fragment));
+        }
+
+        assert_eq!(frames.len(), 4);
+        assert_eq!(parser.corrupt_records(), 1);
+        assert_eq!(frames[0].capture_utc_ms, Some(1_790_966_401_000));
+        assert_eq!(frames[0].measurements()[0].value, 820.0);
+        assert_eq!(frames[1].measurements()[0].value, 540.0);
+        assert_eq!(frames[1].model_b_supply_voltage(), Some((11.8, Some(20))));
+        assert_eq!(frames[2].capture_utc_ms, Some(1_790_966_401_500));
+        assert_eq!(frames[2].model_b_supply_voltage(), Some((12.9, Some(20))));
+        assert_eq!(frames[3].boot_id, 99);
         assert_eq!(frames[3].dropped_records, 2);
     }
 }
