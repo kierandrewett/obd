@@ -2,6 +2,11 @@ target/
 dist/
 .git/
 .github/
+.env
+.env.*
+!.env.example
+config.local.*
+local_config.h
 .vscode/
 .idea/
 *.log
