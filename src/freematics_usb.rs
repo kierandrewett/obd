@@ -95,7 +95,24 @@ pub struct FreematicsFrame {
     pub reader_drops: u64,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FreematicsAcquisitionHealth {
+    pub obd_state: Option<u32>,
+    pub cumulative_timeouts: Option<u32>,
+    pub last_request_latency_ms: Option<u32>,
+    pub consecutive_fast_failures: Option<u32>,
+}
+
 impl FreematicsFrame {
+    pub fn acquisition_health(&self) -> FreematicsAcquisitionHealth {
+        FreematicsAcquisitionHealth {
+            obd_state: self.field_u32(0x089),
+            cumulative_timeouts: self.field_u32(0x087),
+            last_request_latency_ms: self.field_u32(0x088),
+            consecutive_fast_failures: self.field_u32(0x08A),
+        }
+    }
+
     /// Return stored, pending, and permanent DTC scan records in that order.
     pub fn dtc_scans(&self) -> [FreematicsDtcScan; 3] {
         [
@@ -219,6 +236,50 @@ impl FreematicsFrame {
         let age = self.field_age_ms(0x442);
         Some((*value, age))
     }
+
+    /// Decode high-rate Model B supply-voltage samples as device-monotonic
+    /// `(capture_ms, volts)` points. Malformed or impossible entries are
+    /// omitted without discarding the containing telemetry frame.
+    pub fn voltage_waveform(&self) -> Vec<(u32, f64)> {
+        self.fields
+            .iter()
+            .filter(|field| field.pid == 0x0A0 && field.values.len() == 2)
+            .filter_map(|field| {
+                let timestamp = exact_u32(field.values[0])?;
+                let centivolts = exact_u32(field.values[1])?;
+                (centivolts <= 65_535).then_some((timestamp, centivolts as f64 / 100.0))
+            })
+            .collect()
+    }
+
+    /// Decode the timestamped raw accelerometer vectors into magnitude
+    /// samples (in g, matching the firmware sensor's native units).
+    pub fn acceleration_waveform(&self) -> Vec<(u32, f64)> {
+        let timestamps: Vec<_> = self
+            .fields
+            .iter()
+            .filter(|field| field.pid == 0x0A1 && field.values.len() == 1)
+            .filter_map(|field| exact_u32(field.values[0]))
+            .collect();
+        let acceleration: Vec<_> = self
+            .fields
+            .iter()
+            .filter(|field| field.pid == 0x0A2 && field.values.len() == 3)
+            .map(|field| &field.values)
+            .collect();
+        timestamps
+            .into_iter()
+            .zip(acceleration)
+            .filter_map(|(timestamp, vector)| {
+                let magnitude = vector.iter().map(|axis| axis * axis).sum::<f64>().sqrt();
+                magnitude.is_finite().then_some((timestamp, magnitude))
+            })
+            .collect()
+    }
+}
+
+fn exact_u32(value: f64) -> Option<u32> {
+    (value >= 0.0 && value <= u32::MAX as f64 && value.fract() == 0.0).then_some(value as u32)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -803,6 +864,32 @@ mod tests {
                 .values,
             [100.0, 1280.0]
         );
+        assert_eq!(frame.voltage_waveform(), [(100, 12.8)]);
+        let acceleration = frame.acceleration_waveform();
+        assert_eq!(acceleration.len(), 1);
+        assert_eq!(acceleration[0].0, 125);
+        assert!((acceleration[0].1 - 0.374_165_738_677_394_17).abs() < 1e-12);
+    }
+
+    #[test]
+    fn exposes_acquisition_health_without_mixing_it_into_ecu_pids() {
+        let payload = "ABCDEF#0:100,87:3,88:42,89:2,8A:1,10C:800,40C:10";
+        let checksum = payload
+            .bytes()
+            .fold(0u8, |sum, byte| sum.wrapping_add(byte));
+        let line = format!("@FT1,42,100,0,0,0,0C|{payload}*{checksum:02X}");
+        let frame = parse_line(line.as_bytes()).unwrap();
+
+        assert_eq!(
+            frame.acquisition_health(),
+            FreematicsAcquisitionHealth {
+                obd_state: Some(2),
+                cumulative_timeouts: Some(3),
+                last_request_latency_ms: Some(42),
+                consecutive_fast_failures: Some(1),
+            }
+        );
+        assert_eq!(frame.measurements().len(), 1);
     }
 
     #[test]

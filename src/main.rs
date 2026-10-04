@@ -139,6 +139,51 @@ enum AnyAdapter {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct TelemetryReaderDropCounter {
+    cumulative: u64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl TelemetryReaderDropCounter {
+    fn total(&self) -> u64 {
+        self.cumulative
+    }
+
+    fn dropped(&mut self) {
+        self.cumulative = self.cumulative.saturating_add(1);
+    }
+
+    fn reset(&mut self) {
+        self.cumulative = 0;
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+enum TelemetryEnqueueResult {
+    Enqueued,
+    Dropped,
+    Disconnected,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn enqueue_telemetry_frame(
+    mut frame: freematics_usb::FreematicsFrame,
+    telemetry_tx: &mpsc::SyncSender<freematics_usb::FreematicsFrame>,
+    reader_drops: &mut TelemetryReaderDropCounter,
+) -> TelemetryEnqueueResult {
+    frame.reader_drops = reader_drops.total();
+    match telemetry_tx.try_send(frame) {
+        Err(mpsc::TrySendError::Full(_)) => {
+            reader_drops.dropped();
+            TelemetryEnqueueResult::Dropped
+        }
+        Ok(()) => TelemetryEnqueueResult::Enqueued,
+        Err(mpsc::TrySendError::Disconnected(_)) => TelemetryEnqueueResult::Disconnected,
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 impl adapter::DiagnosticAdapter for AnyAdapter {
     async fn request(
         &mut self,
@@ -187,7 +232,7 @@ fn obd_worker(
 
     let mut elm: Option<AnyAdapter> = None;
     let mut freematics: Option<freematics_usb::FreematicsUsb> = None;
-    let mut reader_drops = 0u64;
+    let mut reader_drops = TelemetryReaderDropCounter::default();
     let mut live_running = false;
     let mut poll_config = PollConfig::default();
     let mut current_make: Option<String> = None;
@@ -292,13 +337,13 @@ fn obd_worker(
                             };
                             let _ = event_tx.send(ObdEvent::Connected(info));
                             freematics = Some(device);
-                            reader_drops = 0;
+                            reader_drops.reset();
                             for frame in initial_frames {
-                                if let Err(mpsc::TrySendError::Full(_)) =
-                                    telemetry_tx.try_send(frame)
-                                {
-                                    reader_drops = reader_drops.saturating_add(1);
-                                }
+                                let _ = enqueue_telemetry_frame(
+                                    frame,
+                                    &telemetry_tx,
+                                    &mut reader_drops,
+                                );
                             }
                         }
                         Err(error) => {
@@ -428,14 +473,10 @@ fn obd_worker(
         if let Some(device) = &mut freematics {
             match device.read_frames() {
                 Ok(frames) => {
-                    for mut frame in frames {
-                        frame.reader_drops = reader_drops;
-                        match telemetry_tx.try_send(frame) {
-                            Ok(()) => reader_drops = 0,
-                            Err(mpsc::TrySendError::Full(_frame)) => {
-                                reader_drops = reader_drops.saturating_add(1);
-                            }
-                            Err(mpsc::TrySendError::Disconnected(_)) => {
+                    for frame in frames {
+                        match enqueue_telemetry_frame(frame, &telemetry_tx, &mut reader_drops) {
+                            TelemetryEnqueueResult::Enqueued | TelemetryEnqueueResult::Dropped => {}
+                            TelemetryEnqueueResult::Disconnected => {
                                 telemetry_receiver_closed = true;
                                 break;
                             }
@@ -536,5 +577,53 @@ fn finish_connection(
         Err(error) => {
             let _ = events.send(ObdEvent::ConnectionFailed(error.to_string()));
         }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod telemetry_reader_drop_tests {
+    use super::{TelemetryEnqueueResult, TelemetryReaderDropCounter, enqueue_telemetry_frame};
+    use crate::freematics_usb::FreematicsFrame;
+    use std::collections::HashSet;
+    use std::sync::mpsc;
+
+    fn frame() -> FreematicsFrame {
+        FreematicsFrame {
+            boot_id: 7,
+            capture_ms: 0,
+            capture_utc_ms: None,
+            dropped_records: 0,
+            supported_pids: Some(HashSet::new()),
+            vin: None,
+            calibration_id: None,
+            ecu_name: None,
+            fields: Vec::new(),
+            corrupt_records: 0,
+            corrupt_sample_hex: None,
+            reader_drops: 0,
+        }
+    }
+
+    #[test]
+    fn successful_delivery_does_not_erase_the_cumulative_drop_total() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        sender.try_send(frame()).unwrap();
+        let mut drops = TelemetryReaderDropCounter::default();
+        assert!(matches!(
+            enqueue_telemetry_frame(frame(), &sender, &mut drops),
+            TelemetryEnqueueResult::Dropped
+        ));
+        assert_eq!(drops.total(), 1);
+        receiver.try_recv().unwrap();
+        assert!(matches!(
+            enqueue_telemetry_frame(frame(), &sender, &mut drops),
+            TelemetryEnqueueResult::Enqueued
+        ));
+        assert_eq!(receiver.try_recv().unwrap().reader_drops, 1);
+        assert_eq!(
+            drops.total(),
+            1,
+            "the count is cumulative for the connection"
+        );
     }
 }
