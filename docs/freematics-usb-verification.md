@@ -19,8 +19,11 @@ latest OBD read latency observed on frames with acquisition activity. A PID
 age reset indicates a successful ECU response even when its value did not
 change; the timeout counter records failed reads. More than one ECU request
 can occur between 250 ms telemetry frames, so latency percentiles are sampled
-observations, not a lossless per-request trace. Never run this measurement at
-the same time as the dashboard or serial monitor.
+observations, not a lossless per-request trace. Framework SD-driver messages
+are reduced to fixed error categories (card-select timeout, initialization
+command failure, or FatFS mount-not-ready); raw serial log contents are not
+saved. Never run this measurement at the same time as the dashboard or serial
+monitor.
 
 The repeatable parser-level serial traffic scenario is
 `tests/fixtures/freematics_usb_scenario.txt`, exercised by
