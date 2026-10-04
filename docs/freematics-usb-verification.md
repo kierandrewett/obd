@@ -1,11 +1,15 @@
 # Freematics USB dashboard verification
 
 The dashboard's Freematics USB connection is a passive reader for the Model B
-TeleLogger `@FT1` stream. Auto-detect opens only USB serial ports at 115200 baud
-and accepts a device only after parsing a checksummed telemetry record. It sends
-no ELM or diagnostic commands. USB serial control lines are preserved on open;
-the app does not assert DTR or RTS. A serial monitor must not share the selected
-port with the dashboard.
+TeleLogger `@FT1` stream. Auto-detect considers only the Model B's CP210x USB
+bridge (VID:PID `10c4:ea60`), then accepts it only after parsing a checksummed
+telemetry record. Generic CH340 OBD adapters and other serial devices are
+rejected before the app opens a port. It sends no ELM or diagnostic commands.
+The app preserves DTR and never asserts DTR or RTS itself. Linux's tty layer can
+still pulse DTR during open despite that setting, which may reset the ESP32;
+the app waits up to 12 seconds for the device's first frame after opening. Keep
+one reader on the selected port; a serial monitor must not share it with the
+dashboard.
 
 The repeatable parser-level serial traffic scenario is
 `tests/fixtures/freematics_usb_scenario.txt`, exercised by

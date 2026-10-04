@@ -8,8 +8,18 @@ const FRAME_PREFIX: &[u8] = b"@FT1,";
 const MAX_LINE_BYTES: usize = 16 * 1024;
 const USB_BAUD: u32 = 115_200;
 const AUTO_CONNECT_STARTUP_TIMEOUT: Duration = Duration::from_secs(12);
+const FREEMATICS_USB_VID: u16 = 0x10c4;
+const FREEMATICS_USB_PID: u16 = 0xea60;
 const DTC_SCAN_INTERVAL_MS: u32 = 120_000;
 const DTC_CODE_SLOTS: usize = 15;
+
+fn is_supported_freematics_port(port: &serialport::SerialPortInfo) -> bool {
+    matches!(
+        &port.port_type,
+        serialport::SerialPortType::UsbPort(info)
+            if info.vid == FREEMATICS_USB_VID && info.pid == FREEMATICS_USB_PID
+    )
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FreematicsDtcMode {
@@ -340,6 +350,17 @@ pub struct FreematicsUsb {
 
 impl FreematicsUsb {
     pub fn connect(port_name: &str) -> Result<Self, String> {
+        let ports = serialport::available_ports()
+            .map_err(|error| format!("Cannot enumerate serial ports: {error}"))?;
+        if !ports
+            .iter()
+            .any(|port| port.port_name == port_name && is_supported_freematics_port(port))
+        {
+            return Err(format!(
+                "{port_name} is not the supported Freematics Model B CP210x bridge (10c4:ea60); refusing to open an unidentified serial device"
+            ));
+        }
+
         let port = serialport::new(port_name, USB_BAUD)
             .timeout(Duration::from_millis(75))
             .preserve_dtr_on_open()
@@ -362,11 +383,13 @@ impl FreematicsUsb {
             .map_err(|error| format!("Cannot enumerate serial ports: {error}"))?;
         let candidates: Vec<_> = ports
             .into_iter()
-            .filter(|port| matches!(port.port_type, serialport::SerialPortType::UsbPort(_)))
+            .filter(is_supported_freematics_port)
             .map(|port| port.port_name)
             .collect();
         if candidates.is_empty() {
-            return Err("No USB serial ports found for Freematics auto-detect".into());
+            return Err(
+                "No Freematics Model B CP210x USB bridge found (10c4:ea60); refusing to probe generic serial adapters".into(),
+            );
         }
 
         let mut failures = Vec::new();
@@ -433,6 +456,44 @@ impl FreematicsUsb {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_detect_accepts_only_the_model_b_cp210x_bridge() {
+        let model_b = serialport::SerialPortInfo {
+            port_name: "/dev/ttyUSB1".into(),
+            port_type: serialport::SerialPortType::UsbPort(serialport::UsbPortInfo {
+                vid: 0x10c4,
+                pid: 0xea60,
+                serial_number: None,
+                manufacturer: None,
+                product: None,
+            }),
+        };
+        let generic_ch340 = serialport::SerialPortInfo {
+            port_name: "/dev/ttyUSB0".into(),
+            port_type: serialport::SerialPortType::UsbPort(serialport::UsbPortInfo {
+                vid: 0x1a86,
+                pid: 0x7523,
+                serial_number: None,
+                manufacturer: None,
+                product: None,
+            }),
+        };
+        let other_usb_uart = serialport::SerialPortInfo {
+            port_name: "/dev/ttyUSB2".into(),
+            port_type: serialport::SerialPortType::UsbPort(serialport::UsbPortInfo {
+                vid: 0x0403,
+                pid: 0x6001,
+                serial_number: None,
+                manufacturer: None,
+                product: None,
+            }),
+        };
+
+        assert!(is_supported_freematics_port(&model_b));
+        assert!(!is_supported_freematics_port(&generic_ch340));
+        assert!(!is_supported_freematics_port(&other_usb_uart));
+    }
 
     fn wire_record(capture_ms: u32, rpm: f64, age: u32, supported: &str) -> String {
         let payload = format!(
