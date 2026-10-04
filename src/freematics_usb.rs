@@ -439,14 +439,18 @@ impl FreematicsUsb {
             .preserve_dtr_on_open()
             .open()
             .map_err(|error| format!("{port_name}: {error}"))?;
-        Ok(Self {
+        Ok(Self::from_port(port))
+    }
+
+    fn from_port(port: Box<dyn serialport::SerialPort>) -> Self {
+        Self {
             port,
             parser: FreematicsParser::default(),
             baud_rate: USB_BAUD,
             opened_at: Instant::now(),
             valid_frame_seen: false,
             legacy_baud_attempted: false,
-        })
+        }
     }
 
     pub fn port_name(&self) -> String {
@@ -579,6 +583,97 @@ mod tests {
             false,
             true,
         ));
+    }
+
+    #[cfg(target_os = "linux")]
+    fn pty_device() -> (FreematicsUsb, std::fs::File) {
+        use std::os::fd::FromRawFd;
+
+        let mut master = -1;
+        let mut slave = -1;
+        // SAFETY: openpty initializes both output descriptors or returns an
+        // error. Ownership is transferred below to File and serialport.
+        let result = unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        };
+        assert_eq!(
+            result,
+            0,
+            "openpty failed: {}",
+            std::io::Error::last_os_error()
+        );
+        let path =
+            std::fs::read_link(format!("/proc/self/fd/{slave}")).expect("resolve PTY slave path");
+        // SAFETY: close the original slave descriptor before serialport opens
+        // its own descriptor for the same PTY.
+        assert_eq!(unsafe { libc::close(slave) }, 0);
+        let port = serialport::new(path.to_str().expect("PTY path is UTF-8"), USB_BAUD)
+            .timeout(Duration::from_millis(20))
+            .preserve_dtr_on_open()
+            .open()
+            .expect("open PTY slave through serialport");
+        // SAFETY: master is a newly allocated descriptor from openpty and is
+        // now owned by this File.
+        let master = unsafe { std::fs::File::from_raw_fd(master) };
+        (FreematicsUsb::from_port(port), master)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn read_pty_frame(device: &mut FreematicsUsb) -> FreematicsFrame {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            let frames = device.read_frames().expect("read PTY telemetry");
+            if let Some(frame) = frames.into_iter().next() {
+                return frame;
+            }
+        }
+        panic!("timed out waiting for a complete FT1 frame over PTY");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn reads_fragmented_ft1_frames_at_preferred_baud_over_pty() {
+        use std::io::Write;
+
+        let (mut device, mut master) = pty_device();
+        let wire = wire_record(1250, 790.0, 2, "0C");
+        let split = wire.len() / 2;
+        master.write_all(&wire.as_bytes()[..split]).unwrap();
+        assert!(device.read_frames().unwrap().is_empty());
+        master.write_all(&wire.as_bytes()[split..]).unwrap();
+
+        let frame = read_pty_frame(&mut device);
+        assert_eq!(frame.capture_ms, 1250);
+        assert_eq!(frame.corrupt_records, 0);
+        assert_eq!(device.baud_rate(), 460_800);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn switches_same_pty_to_legacy_baud_and_discards_wrong_rate_partial() {
+        use std::io::Write;
+
+        let (mut device, mut master) = pty_device();
+        master.write_all(b"@FT1,partial-at-wrong-baud").unwrap();
+        assert!(device.read_frames().unwrap().is_empty());
+        device.opened_at = Instant::now() - LEGACY_BAUD_FALLBACK_DELAY;
+        assert!(device.read_frames().unwrap().is_empty());
+        assert_eq!(device.baud_rate(), LEGACY_USB_BAUD);
+        assert!(device.legacy_baud_attempted);
+
+        master
+            .write_all(wire_record(1500, 775.0, 3, "0C").as_bytes())
+            .unwrap();
+        let frame = read_pty_frame(&mut device);
+        assert_eq!(frame.capture_ms, 1500);
+        assert_eq!(frame.corrupt_records, 0);
+        assert_eq!(device.baud_rate(), LEGACY_USB_BAUD);
     }
 
     #[test]
