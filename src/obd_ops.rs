@@ -10,6 +10,8 @@ use crate::elm327::{Elm327Error, ElmAdapter, decode_protocol};
 use crate::obd;
 use std::sync::mpsc;
 
+const SUPPORTED_PID_RANGES: &[&str] = &["0100", "0120", "0140", "0160", "0180", "01A0", "01C0"];
+
 /// Run the standard ELM327 initialisation sequence.
 /// `status` receives human-readable progress strings.
 pub async fn init_elm<A, F>(elm: &mut A, status: F) -> Result<(), Elm327Error>
@@ -209,7 +211,7 @@ pub async fn poll_live_data<A: DiagnosticAdapter>(
         PollMode::Fast => &["010C", "010D", "0111", "0104", "0105", "010F", "0110"],
         PollMode::Full => &[
             "010C", "010D", "0105", "0104", "0111", "010F", "0110", "012F", "0106", "0107", "010B",
-            "010E", "015C", "0142", "0146", "012C", "012E", "0133", "0149", "0144",
+            "010E", "015C", "0142", "0146", "012C", "012E", "0133", "0149", "0144", "01A6",
         ],
     };
 
@@ -282,25 +284,39 @@ pub async fn read_freeze_frame<A: DiagnosticAdapter>(
     }
 }
 
-/// Query supported PIDs across the four standard Mode 01 ranges.
+/// Query supported Mode 01 PIDs, following continuation bits through PID C0.
+/// Keep these ranges in sync with the 01A6 odometer entry in the PID catalogue.
+fn append_supported_pid_page(base: u8, data: &[u8], supported: &mut Vec<u8>) -> Option<bool> {
+    if data.len() < 4 {
+        return None;
+    }
+    let bits = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+    for index in 0..32u16 {
+        if bits & (1u32 << (31 - index)) != 0 {
+            let pid = u16::from(base) + index + 1;
+            if pid <= u16::from(u8::MAX) {
+                supported.push(pid as u8);
+            }
+        }
+    }
+    Some(base < 0xC0 && bits & 1 != 0)
+}
+
 pub async fn query_supported_pids<A: DiagnosticAdapter>(
     elm: &mut A,
     event_tx: &mpsc::Sender<ObdEvent>,
 ) {
     let mut all_supported = Vec::new();
-    for range in &["0100", "0120", "0140", "0160"] {
+    for range in SUPPORTED_PID_RANGES {
         match request_hex(elm, range, 2000).await {
             Ok(lines) => {
-                if let Some(data) = obd::parse_elm_response(range, &lines) {
-                    let base = u8::from_str_radix(&range[2..4], 16).unwrap_or(0);
-                    if data.len() >= 4 {
-                        let bits = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
-                        for i in 0..32u8 {
-                            if bits & (1 << (31 - i)) != 0 {
-                                all_supported.push(base + i + 1);
-                            }
-                        }
-                    }
+                let Some(data) = obd::parse_elm_response(range, &lines) else {
+                    break;
+                };
+                let base = u8::from_str_radix(&range[2..4], 16).unwrap_or(0);
+                match append_supported_pid_page(base, &data, &mut all_supported) {
+                    Some(true) => {}
+                    Some(false) | None => break,
                 }
             }
             Err(_) => break,
@@ -394,6 +410,36 @@ mod elm_profile_tests {
         assert!(elm.commands.iter().any(|command| command == "AT PB 91 06"));
         assert!(!elm.commands.iter().any(|command| command == "ATSP0"));
         assert!(!elm.commands.iter().any(|command| command == "0100"));
+    }
+
+    #[test]
+    fn supported_pid_pages_follow_continuations_and_include_extended_odometer() {
+        let mut supported = Vec::new();
+        assert_eq!(
+            append_supported_pid_page(0x00, &[0, 0, 0, 1], &mut supported),
+            Some(true)
+        );
+        assert_eq!(supported, vec![0x20]);
+
+        // PID A6 is bit 6 of the 01A0 page; bit 0 announces a 01C0 page.
+        assert_eq!(
+            append_supported_pid_page(0xA0, &[0x04, 0, 0, 1], &mut supported),
+            Some(true)
+        );
+        assert_eq!(supported, vec![0x20, 0xA6, 0xC0]);
+
+        // The terminal 01C0 page has no continuation page in the standard map.
+        assert_eq!(
+            append_supported_pid_page(0xC0, &[0, 0, 0, 1], &mut supported),
+            Some(false)
+        );
+        assert_eq!(supported, vec![0x20, 0xA6, 0xC0, 0xE0]);
+        assert_eq!(
+            append_supported_pid_page(0x00, &[1, 2, 3], &mut supported),
+            None
+        );
+        assert_eq!(SUPPORTED_PID_RANGES.last(), Some(&"01C0"));
+        assert!(!SUPPORTED_PID_RANGES.contains(&"01E0"));
     }
 }
 
