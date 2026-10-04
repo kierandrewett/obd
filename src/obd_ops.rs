@@ -291,7 +291,9 @@ fn append_supported_pid_page(base: u8, data: &[u8], supported: &mut Vec<u8>) -> 
         return None;
     }
     let bits = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
-    for index in 0..32u16 {
+    // Bitmap bit 0 announces the next 32-PID page; it is not itself a PID.
+    // The remaining bits map to base+1 through base+31.
+    for index in 0..31u16 {
         if bits & (1u32 << (31 - index)) != 0 {
             let pid = u16::from(base) + index + 1;
             if pid <= u16::from(u8::MAX) {
@@ -419,21 +421,24 @@ mod elm_profile_tests {
             append_supported_pid_page(0x00, &[0, 0, 0, 1], &mut supported),
             Some(true)
         );
-        assert_eq!(supported, vec![0x20]);
+        assert!(
+            supported.is_empty(),
+            "continuation bit is not a supported PID"
+        );
 
         // PID A6 is bit 6 of the 01A0 page; bit 0 announces a 01C0 page.
         assert_eq!(
             append_supported_pid_page(0xA0, &[0x04, 0, 0, 1], &mut supported),
             Some(true)
         );
-        assert_eq!(supported, vec![0x20, 0xA6, 0xC0]);
+        assert_eq!(supported, vec![0xA6]);
 
         // The terminal 01C0 page has no continuation page in the standard map.
         assert_eq!(
             append_supported_pid_page(0xC0, &[0, 0, 0, 1], &mut supported),
             Some(false)
         );
-        assert_eq!(supported, vec![0x20, 0xA6, 0xC0, 0xE0]);
+        assert_eq!(supported, vec![0xA6]);
         assert_eq!(
             append_supported_pid_page(0x00, &[1, 2, 3], &mut supported),
             None

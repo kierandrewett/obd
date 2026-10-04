@@ -14,6 +14,7 @@ const FREEMATICS_USB_VID: u16 = 0x10c4;
 const FREEMATICS_USB_PID: u16 = 0xea60;
 const DTC_SCAN_INTERVAL_MS: u32 = 120_000;
 const DTC_CODE_SLOTS: usize = 15;
+const MAX_IDENTITY_METADATA_BYTES: usize = 32;
 
 fn legacy_baud_fallback_due(elapsed: Duration, valid_frame_seen: bool, attempted: bool) -> bool {
     !valid_frame_seen && !attempted && elapsed >= LEGACY_BAUD_FALLBACK_DELAY
@@ -84,6 +85,8 @@ pub struct FreematicsFrame {
     pub dropped_records: u32,
     pub supported_pids: Option<HashSet<u8>>,
     pub vin: Option<String>,
+    pub calibration_id: Option<String>,
+    pub ecu_name: Option<String>,
     pub fields: Vec<TelemetryField>,
     pub corrupt_records: u64,
     /// Bounded hex-only sample from the first corrupt FT1 record since the
@@ -338,17 +341,31 @@ pub fn parse_line(line: &[u8]) -> Option<FreematicsFrame> {
     };
     let capture_utc_ms: i64 = metadata.next()?.parse().ok()?;
     let dropped_records = metadata.next()?.parse().ok()?;
-    let supported_text = metadata.next()?;
-    let (supported_text, vin) = match supported_text.split_once(";vin=") {
-        Some((supported, vin))
-            if vin.len() == 17 && vin.bytes().all(|byte| byte.is_ascii_alphanumeric()) =>
-        {
-            (supported, Some(vin.to_string()))
+    let metadata_text = metadata.next()?;
+    let mut suffix = metadata_text.split(';');
+    let supported_text = suffix.next()?;
+    let mut vin = None;
+    let mut calibration_id = None;
+    let mut ecu_name = None;
+    for item in suffix {
+        if let Some(value) = item.strip_prefix("vin=") {
+            if vin.is_some()
+                || value.len() != 17
+                || !value.bytes().all(|b| b.is_ascii_alphanumeric())
+            {
+                return None;
+            }
+            vin = Some(value.to_string());
+        } else if let Some(value) = item.strip_prefix("cal=") {
+            if calibration_id.is_none() {
+                calibration_id = decode_identity_metadata(value);
+            }
+        } else if let Some(value) = item.strip_prefix("ecu=") {
+            if ecu_name.is_none() {
+                ecu_name = decode_identity_metadata(value);
+            }
         }
-        Some(_) => return None,
-        None if supported_text.contains(';') => return None,
-        None => (supported_text, None),
-    };
+    }
     let supported_pids = if supported_text.is_empty() {
         None
     } else {
@@ -405,11 +422,37 @@ pub fn parse_line(line: &[u8]) -> Option<FreematicsFrame> {
         dropped_records,
         supported_pids,
         vin,
+        calibration_id,
+        ecu_name,
         fields,
         corrupt_records: 0,
         corrupt_sample_hex: None,
         reader_drops: 0,
     })
+}
+
+fn decode_identity_metadata(encoded: &str) -> Option<String> {
+    let encoded = encoded.as_bytes();
+    if encoded.is_empty()
+        || encoded.len() > MAX_IDENTITY_METADATA_BYTES * 2
+        || encoded.len() % 2 != 0
+    {
+        return None;
+    }
+    let bytes = (0..encoded.len())
+        .step_by(2)
+        .map(|index| {
+            let pair = std::str::from_utf8(&encoded[index..index + 2]).ok()?;
+            u8::from_str_radix(pair, 16).ok()
+        })
+        .collect::<Option<Vec<_>>>()?;
+    if !bytes.iter().all(|byte| (0x20..=0x7e).contains(byte)) {
+        return None;
+    }
+    let decoded = std::str::from_utf8(&bytes)
+        .ok()?
+        .trim_matches(char::is_whitespace);
+    (!decoded.is_empty()).then(|| decoded.to_string())
 }
 
 pub struct FreematicsUsb {
@@ -746,6 +789,8 @@ mod tests {
         assert_eq!(frame.capture_ms, 1200);
         assert_eq!(frame.capture_utc_ms, Some(1_790_966_400_000));
         assert_eq!(frame.vin, None);
+        assert_eq!(frame.calibration_id, None);
+        assert_eq!(frame.ecu_name, None);
         assert_eq!(frame.measurements()[0].cmd, "010C");
         assert_eq!(frame.measurements()[0].age_ms, Some(125));
         assert_eq!(frame.measurements()[0].supported, Some(true));
@@ -828,6 +873,65 @@ mod tests {
 
         assert_eq!(frame.vin.as_deref(), Some("1HGCM82633A004352"));
         assert_eq!(frame.supported_pids.unwrap(), HashSet::from([0x0C, 0x0D]));
+    }
+
+    #[test]
+    fn parses_hex_encoded_identity_metadata_after_supported_pids_and_vin() {
+        let line = wire_record(
+            1200,
+            720.0,
+            125,
+            "0C,0D;vin=1HGCM82633A004352;cal=2043414C2D31323320;ecu=20454E47494E452020",
+        );
+        let frame = parse_line(line.trim_end().as_bytes()).unwrap();
+
+        assert_eq!(frame.vin.as_deref(), Some("1HGCM82633A004352"));
+        assert_eq!(frame.calibration_id.as_deref(), Some("CAL-123"));
+        assert_eq!(frame.ecu_name.as_deref(), Some("ENGINE"));
+        assert_eq!(frame.supported_pids.unwrap(), HashSet::from([0x0C, 0x0D]));
+        assert_eq!(
+            frame
+                .fields
+                .iter()
+                .find(|field| field.pid == 0x10C)
+                .unwrap()
+                .values,
+            [720.0]
+        );
+    }
+
+    #[test]
+    fn malformed_identity_metadata_is_ignored_without_rejecting_numeric_telemetry() {
+        let cases = vec![
+            ("cal=414".to_string(), None, None),             // partial byte
+            ("cal=GG".to_string(), None, None),              // non-hex
+            ("cal=410042".to_string(), None, None),          // non-printable NUL
+            ("cal=20".to_string(), None, None),              // trims to empty
+            ("cal=4142;ecu=".to_string(), Some("AB"), None), // partial second field
+            (
+                format!("cal={}", "41".repeat(MAX_IDENTITY_METADATA_BYTES + 1)),
+                None,
+                None,
+            ), // over limit
+            ("cal=4142;ecu=414243".to_string(), Some("AB"), Some("ABC")), // valid fields
+        ];
+
+        for (suffix, expected_cal, expected_ecu) in cases {
+            let line = wire_record(1200, 720.0, 125, &format!("0C;{suffix}"));
+            let frame = parse_line(line.trim_end().as_bytes())
+                .unwrap_or_else(|| panic!("metadata rejected numeric frame: {suffix}"));
+            assert_eq!(frame.calibration_id.as_deref(), expected_cal, "{suffix}");
+            assert_eq!(frame.ecu_name.as_deref(), expected_ecu, "{suffix}");
+            assert_eq!(
+                frame
+                    .fields
+                    .iter()
+                    .find(|field| field.pid == 0x10C)
+                    .unwrap()
+                    .values,
+                [720.0]
+            );
+        }
     }
 
     #[test]

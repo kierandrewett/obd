@@ -239,11 +239,17 @@ pub struct ObdApp {
 
     // Vehicle info
     vin: Option<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    freematics_calibration_id: Option<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    freematics_ecu_name: Option<String>,
     voltage: Option<String>,
     #[cfg(not(target_arch = "wasm32"))]
     freematics_boot_id: Option<u64>,
     #[cfg(not(target_arch = "wasm32"))]
     freematics_capture_ms: Option<u32>,
+    #[cfg(not(target_arch = "wasm32"))]
+    freematics_capture_utc_ms: Option<i64>,
     #[cfg(not(target_arch = "wasm32"))]
     freematics_dropped_records: u32,
     #[cfg(not(target_arch = "wasm32"))]
@@ -274,12 +280,27 @@ pub struct ObdApp {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[derive(Default)]
 struct FreematicsDtcScan {
+    availability: crate::freematics_usb::FreematicsDtcAvailability,
     status: Option<u8>,
+    count: Option<u8>,
     age_ms: Option<u32>,
     received_at: Option<Instant>,
     codes: Vec<Dtc>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Default for FreematicsDtcScan {
+    fn default() -> Self {
+        Self {
+            availability: crate::freematics_usb::FreematicsDtcAvailability::NoScan,
+            status: None,
+            count: None,
+            age_ms: None,
+            received_at: None,
+            codes: Vec::new(),
+        }
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -564,11 +585,17 @@ impl ObdApp {
             freeze_data: Vec::new(),
             freeze_frame_read: false,
             vin: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            freematics_calibration_id: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            freematics_ecu_name: None,
             voltage: None,
             #[cfg(not(target_arch = "wasm32"))]
             freematics_boot_id: None,
             #[cfg(not(target_arch = "wasm32"))]
             freematics_capture_ms: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            freematics_capture_utc_ms: None,
             #[cfg(not(target_arch = "wasm32"))]
             freematics_dropped_records: 0,
             #[cfg(not(target_arch = "wasm32"))]
@@ -601,12 +628,18 @@ impl ObdApp {
                         self.connection_info = None;
                         self.vin = None;
                         self.voltage = None;
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            self.freematics_calibration_id = None;
+                            self.freematics_ecu_name = None;
+                        }
                         self.live_data.clear();
                         self.supported_pids.clear();
                         #[cfg(not(target_arch = "wasm32"))]
                         {
                             self.freematics_boot_id = None;
                             self.freematics_capture_ms = None;
+                            self.freematics_capture_utc_ms = None;
                             self.freematics_dropped_records = 0;
                             self.freematics_reader_drops = 0;
                             self.freematics_corrupt_records = 0;
@@ -653,6 +686,18 @@ impl ObdApp {
                     self.connecting = false;
                     self.live_running = false;
                     self.connection_info = None;
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        self.freematics_calibration_id = None;
+                        self.freematics_ecu_name = None;
+                        self.freematics_boot_id = None;
+                        self.freematics_capture_ms = None;
+                        self.freematics_capture_utc_ms = None;
+                        self.freematics_dtcs =
+                            std::array::from_fn(|_| FreematicsDtcScan::default());
+                    }
+                    self.live_data.clear();
+                    self.supported_pids.clear();
                     self.connection_status = "Disconnected".to_string();
                     self.release_wake_lock();
                     self.add_log("[DISCONNECTED]");
@@ -801,6 +846,7 @@ impl ObdApp {
                 frame.boot_id
             ));
             self.live_data.clear();
+            self.freematics_capture_utc_ms = None;
             self.freematics_dtcs = std::array::from_fn(|_| FreematicsDtcScan::default());
         }
         let previous_device_drops = self.freematics_dropped_records;
@@ -808,6 +854,7 @@ impl ObdApp {
         let previous_corrupt_records = self.freematics_corrupt_records;
         self.freematics_boot_id = Some(frame.boot_id);
         self.freematics_capture_ms = Some(frame.capture_ms);
+        self.freematics_capture_utc_ms = frame.capture_utc_ms;
         self.freematics_dropped_records = frame.dropped_records;
         self.freematics_reader_drops = frame.reader_drops;
         self.supported_pids = frame
@@ -819,6 +866,8 @@ impl ObdApp {
         if let Some(vin) = frame.vin.as_ref() {
             self.vin = Some(vin.clone());
         }
+        self.freematics_calibration_id = frame.calibration_id.clone();
+        self.freematics_ecu_name = frame.ecu_name.clone();
         for (index, scan) in frame.dtc_scans().into_iter().enumerate() {
             let status = match scan.status {
                 Some(crate::freematics_usb::FreematicsDtcStatus::NoResponse) => Some(0),
@@ -843,7 +892,9 @@ impl ObdApp {
                 Vec::new()
             };
             self.freematics_dtcs[index] = FreematicsDtcScan {
+                availability: scan.availability,
                 status,
+                count: scan.count,
                 age_ms: scan.age_ms,
                 received_at: scan.age_ms.map(|_| received_at),
                 codes,
@@ -1854,6 +1905,15 @@ impl ObdApp {
 
         if self.is_freematics_usb() {
             ui.label("This connection is read-only; active diagnostic requests are unavailable.");
+            let captured = self
+                .freematics_capture_utc_ms
+                .and_then(chrono::DateTime::<chrono::Utc>::from_timestamp_millis)
+                .map(|timestamp| timestamp.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+                .unwrap_or_else(|| "UTC unavailable on device".to_string());
+            ui.label(
+                RichText::new(format!("Latest device frame captured: {captured}"))
+                    .color(Color32::from_gray(145)),
+            );
         } else {
             ui.horizontal(|ui| {
                 if self.live_running {
@@ -1988,10 +2048,40 @@ impl ObdApp {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 for (label, scan) in sections {
                     ui.heading(label);
+                    match scan.availability {
+                        crate::freematics_usb::FreematicsDtcAvailability::Unsupported => {
+                            ui.label(
+                                RichText::new(
+                                    "This telemetry stream does not report this scan mode",
+                                )
+                                .color(Color32::from_gray(125)),
+                            );
+                            ui.add_space(8.0);
+                            continue;
+                        }
+                        crate::freematics_usb::FreematicsDtcAvailability::NoScan => {
+                            ui.label(
+                                RichText::new("No completed scan reported yet")
+                                    .color(Color32::from_gray(125)),
+                            );
+                            ui.add_space(8.0);
+                            continue;
+                        }
+                        crate::freematics_usb::FreematicsDtcAvailability::UnknownStatus => {
+                            ui.label(
+                                RichText::new("Scan status is unknown; no conclusion about codes")
+                                    .color(Color32::from_rgb(235, 165, 55)),
+                            );
+                        }
+                        crate::freematics_usb::FreematicsDtcAvailability::Fresh
+                        | crate::freematics_usb::FreematicsDtcAvailability::Stale => {}
+                    }
                     let Some(age_ms) = scan.age_ms(now) else {
                         ui.label(
-                            RichText::new("No completed scan reported yet")
-                                .color(Color32::from_gray(125)),
+                            RichText::new(
+                                "Scan age unavailable; results cannot be freshness-checked",
+                            )
+                            .color(Color32::from_gray(125)),
                         );
                         ui.add_space(8.0);
                         continue;
@@ -2013,6 +2103,12 @@ impl ObdApp {
                     };
                     ui.horizontal(|ui| {
                         ui.label(status_text);
+                        if let Some(count) = scan.count {
+                            ui.label(
+                                RichText::new(format!("Reported count: {count}"))
+                                    .color(Color32::from_gray(145)),
+                            );
+                        }
                         ui.label(
                             RichText::new(format!("Last scan {age_text}")).color(if stale {
                                 Color32::from_rgb(235, 165, 55)
@@ -2264,7 +2360,7 @@ impl ObdApp {
         }
 
         if self.is_freematics_usb() {
-            ui.label("VIN and supported Mode 01 PIDs are shown when reported by the device; active queries are unavailable.");
+            ui.label("VIN, calibration ID, ECU name, and supported Mode 01 PIDs appear when available in device telemetry; active queries are unavailable.");
         } else {
             #[cfg(not(target_arch = "wasm32"))]
             if self.elm_can_mode == crate::elm327::ElmCanMode::CorsaDMediumSpeed {
@@ -2305,6 +2401,24 @@ impl ObdApp {
                         ui.label(RichText::new("Not read").color(Color32::from_gray(140)));
                     }
                     ui.end_row();
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if self.is_freematics_usb() {
+                        ui.label(RichText::new("Calibration ID:").strong());
+                        ui.label(
+                            self.freematics_calibration_id
+                                .as_deref()
+                                .unwrap_or("Not available in telemetry"),
+                        );
+                        ui.end_row();
+                        ui.label(RichText::new("ECU name:").strong());
+                        ui.label(
+                            self.freematics_ecu_name
+                                .as_deref()
+                                .unwrap_or("Not available in telemetry"),
+                        );
+                        ui.end_row();
+                    }
 
                     if let Some(vin) = &self.vin {
                         let info = crate::vin_decoder::decode(vin);
@@ -2717,10 +2831,12 @@ mod adapter_ui_tests {
         let frame = crate::freematics_usb::FreematicsFrame {
             boot_id: 7,
             capture_ms: 1_250,
-            capture_utc_ms: None,
+            capture_utc_ms: Some(1_790_966_400_000),
             dropped_records: 0,
             supported_pids: Some(HashSet::from([0x0C, 0x0D])),
             vin: Some("1HGCM82633A004352".into()),
+            calibration_id: Some("CAL-123".into()),
+            ecu_name: Some("ENGINE".into()),
             fields,
             corrupt_records: 0,
             corrupt_sample_hex: None,
@@ -2728,12 +2844,21 @@ mod adapter_ui_tests {
         };
 
         app.apply_freematics_frame(frame);
+        assert_eq!(app.freematics_capture_utc_ms, Some(1_790_966_400_000));
         assert_eq!(app.vin.as_deref(), Some("1HGCM82633A004352"));
+        assert_eq!(app.freematics_calibration_id.as_deref(), Some("CAL-123"));
+        assert_eq!(app.freematics_ecu_name.as_deref(), Some("ENGINE"));
         assert_eq!(
             app.supported_pids.iter().copied().collect::<HashSet<_>>(),
             HashSet::from([0x0C, 0x0D])
         );
         assert_eq!(app.freematics_dtcs[0].codes[0].code, "P0134");
+        assert_eq!(app.freematics_dtcs[0].count, Some(1));
+        assert_eq!(
+            app.freematics_dtcs[0].availability,
+            crate::freematics_usb::FreematicsDtcAvailability::Fresh
+        );
+        assert_eq!(app.freematics_dtcs[1].count, Some(0));
         assert_eq!(app.freematics_dtcs[1].status, Some(1));
         assert!(
             command_rx.try_recv().is_err(),
@@ -2756,6 +2881,22 @@ mod adapter_ui_tests {
         assert!(
             command_rx.try_recv().is_err(),
             "drawing cached DTCs must remain passive"
+        );
+        let _ = context.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.show_vehicle_info(ui));
+            },
+        );
+        assert!(
+            command_rx.try_recv().is_err(),
+            "drawing cached vehicle identity must remain passive"
         );
     }
 
