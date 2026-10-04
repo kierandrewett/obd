@@ -591,6 +591,7 @@ mod telemetry_reader_drop_tests {
         FreematicsFrame {
             boot_id: 7,
             capture_ms: 0,
+            reader_received_at: std::time::Instant::now(),
             capture_utc_ms: None,
             dropped_records: 0,
             supported_pids: Some(HashSet::new()),

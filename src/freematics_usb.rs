@@ -81,6 +81,10 @@ pub struct TelemetryField {
 pub struct FreematicsFrame {
     pub boot_id: u64,
     pub capture_ms: u32,
+    /// Host monotonic instant when the complete telemetry record reached the
+    /// serial parser. Preserved across the reader queue so dashboard age
+    /// includes time spent waiting for UI processing.
+    pub reader_received_at: Instant,
     pub capture_utc_ms: Option<i64>,
     pub dropped_records: u32,
     pub supported_pids: Option<HashSet<u8>>,
@@ -386,6 +390,7 @@ fn bounded_hex(bytes: &[u8]) -> String {
 }
 
 pub fn parse_line(line: &[u8]) -> Option<FreematicsFrame> {
+    let reader_received_at = Instant::now();
     let line = line.strip_suffix(b"\r").unwrap_or(line);
     if !line.starts_with(FRAME_PREFIX) {
         return None;
@@ -479,6 +484,7 @@ pub fn parse_line(line: &[u8]) -> Option<FreematicsFrame> {
     Some(FreematicsFrame {
         boot_id,
         capture_ms,
+        reader_received_at,
         capture_utc_ms,
         dropped_records,
         supported_pids,

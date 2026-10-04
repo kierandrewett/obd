@@ -917,7 +917,7 @@ impl ObdApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn apply_freematics_frame(&mut self, frame: crate::freematics_usb::FreematicsFrame) {
-        let received_at = Instant::now();
+        let received_at = frame.reader_received_at;
         if self.freematics_boot_id == Some(frame.boot_id)
             && self.freematics_capture_ms.is_some_and(|previous| {
                 let elapsed = frame.capture_ms.wrapping_sub(previous);
@@ -3086,6 +3086,7 @@ mod adapter_ui_tests {
         let frame = crate::freematics_usb::FreematicsFrame {
             boot_id: 7,
             capture_ms: 1_250,
+            reader_received_at: Instant::now(),
             capture_utc_ms: Some(1_790_966_400_000),
             dropped_records: 0,
             supported_pids: Some(HashSet::from([0x0C, 0x0D])),
@@ -3323,6 +3324,37 @@ mod adapter_ui_tests {
             Duration::from_millis(25)
         );
         assert_eq!(app.freematics_capture_utc_ms, None);
+    }
+
+    #[test]
+    fn queued_freematics_frames_keep_their_serial_receive_age() {
+        let (commands, _command_rx) = mpsc::channel();
+        let (_events, event_rx) = mpsc::channel();
+        let (_telemetry_tx, telemetry_rx) = mpsc::channel();
+        let mut app = ObdApp::new_state(commands, event_rx, telemetry_rx, None);
+        app.connection_kind = ConnectionKind::FreematicsUsb;
+
+        let payload = "ABCDEF#0:100,10C:800,40C:50,24:1375";
+        let checksum = payload
+            .bytes()
+            .fold(0u8, |sum, byte| sum.wrapping_add(byte));
+        let wire = format!("@FT1,42,100,0,0,0,0C,0D|{payload}*{checksum:02X}");
+        let mut frame = crate::freematics_usb::parse_line(wire.as_bytes()).unwrap();
+        frame.reader_received_at = Instant::now() - Duration::from_secs(2);
+        let serial_received_at = frame.reader_received_at;
+        app.apply_freematics_frame(frame);
+
+        let rpm = app.live_data.get("010C").unwrap();
+        assert!(app.pid_is_stale("010C", rpm));
+        assert!(ObdApp::displayed_age_ms(rpm).unwrap() >= 2_050);
+        assert_eq!(
+            app.freematics_last_frame_received_at,
+            Some(serial_received_at)
+        );
+        assert!(
+            Instant::now().duration_since(app.freematics_last_frame_received_at.unwrap())
+                >= Duration::from_secs(2)
+        );
     }
 
     #[test]
