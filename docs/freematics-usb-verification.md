@@ -11,6 +11,17 @@ the app waits up to 12 seconds for the device's first frame after opening. Keep
 one reader on the selected port; a serial monitor must not share it with the
 dashboard.
 
+For a source-of-gaps measurement, stop the dashboard and run the firmware
+repository's `tools/measure_usb_stream.py` against the verified Model B port.
+The sanitized JSON reports capture cadence, transport arrivals, device USB
+drops, per-PID acquisition-age resets, the OBD timeout-counter delta, and the
+latest OBD read latency observed on frames with acquisition activity. A PID
+age reset indicates a successful ECU response even when its value did not
+change; the timeout counter records failed reads. More than one ECU request
+can occur between 250 ms telemetry frames, so latency percentiles are sampled
+observations, not a lossless per-request trace. Never run this measurement at
+the same time as the dashboard or serial monitor.
+
 The repeatable parser-level serial traffic scenario is
 `tests/fixtures/freematics_usb_scenario.txt`, exercised by
 `freematics_usb::tests::simulated_serial_shudder_and_reconnect_scenario_is_repeatable`.
