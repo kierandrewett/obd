@@ -40,3 +40,6 @@ jobs:
 
       - name: Run tests
         run: cargo test
+
+      - name: Test release artifact credential gate
+        run: python3 -m unittest tools/test_check_release_artifacts.py
