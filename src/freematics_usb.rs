@@ -1,7 +1,7 @@
 use crate::obd;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Read};
-use std::thread;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 const FRAME_PREFIX: &[u8] = b"@FT1,";
@@ -9,7 +9,6 @@ const MAX_LINE_BYTES: usize = 16 * 1024;
 const USB_BAUD: u32 = 460_800;
 const LEGACY_USB_BAUD: u32 = 115_200;
 const LEGACY_BAUD_FALLBACK_DELAY: Duration = Duration::from_secs(3);
-const AUTO_CONNECT_STARTUP_TIMEOUT: Duration = Duration::from_secs(12);
 const FREEMATICS_USB_VID: u16 = 0x10c4;
 const FREEMATICS_USB_PID: u16 = 0xea60;
 const DTC_SCAN_INTERVAL_MS: u32 = 120_000;
@@ -88,6 +87,9 @@ pub struct FreematicsFrame {
     pub capture_utc_ms: Option<i64>,
     pub dropped_records: u32,
     pub supported_pids: Option<HashSet<u8>>,
+    /// Exact ECU response data bytes for the passive USB-only structured PID
+    /// extension. The cloud telemetry schema remains unchanged.
+    pub raw_mode01: HashMap<u8, Vec<u8>>,
     pub vin: Option<String>,
     pub calibration_id: Option<String>,
     pub ecu_name: Option<String>,
@@ -205,16 +207,62 @@ impl FreematicsFrame {
             let age_pid = 0x400 | pid as u16;
             let age_ms = self.field_age_ms(age_pid);
             output.push(FreematicsMeasurement {
-                cmd,
+                cmd: cmd.clone(),
                 name: definition.description.to_string(),
                 unit: definition.unit.to_string(),
                 value: field.values[0],
+                display_value: self
+                    .raw_mode01
+                    .get(&pid)
+                    .map(|bytes| obd::decode_pid(definition, bytes)),
+                raw_bytes: self.raw_mode01.get(&pid).cloned(),
                 age_ms,
                 supported: self
                     .supported_pids
                     .as_ref()
                     .map(|supported| supported.contains(&pid)),
             });
+
+            let Some(raw) = self.raw_mode01.get(&pid) else {
+                continue;
+            };
+            if pid == 0x03 && raw.len() == 2 {
+                output.push(FreematicsMeasurement {
+                    cmd: format!("{cmd}-B2"),
+                    name: "Fuel system status bank 2".to_string(),
+                    unit: String::new(),
+                    value: field.values[0],
+                    display_value: Some(obd::decode_pid(definition, &raw[1..])),
+                    raw_bytes: Some(vec![raw[1]]),
+                    age_ms,
+                    supported: Some(true),
+                });
+            } else if (0x14..=0x1B).contains(&pid) && raw.len() == 2 {
+                output.push(FreematicsMeasurement {
+                    cmd: format!("{cmd}-TRIM"),
+                    name: format!("{} short-term fuel trim", definition.description),
+                    unit: "%".to_string(),
+                    value: (raw[1] as f64 - 128.0) * 100.0 / 128.0,
+                    display_value: None,
+                    raw_bytes: Some(vec![raw[1]]),
+                    age_ms,
+                    supported: Some(true),
+                });
+            } else if ((0x24..=0x2B).contains(&pid) || (0x34..=0x3B).contains(&pid))
+                && raw.len() == 4
+            {
+                let lambda = (u16::from_be_bytes([raw[0], raw[1]]) as f64) * 2.0 / 32768.0;
+                output.push(FreematicsMeasurement {
+                    cmd: format!("{cmd}-LAMBDA"),
+                    name: format!("{} lambda", definition.description),
+                    unit: "λ".to_string(),
+                    value: lambda,
+                    display_value: None,
+                    raw_bytes: Some(raw[..2].to_vec()),
+                    age_ms,
+                    supported: Some(true),
+                });
+            }
         }
         output
     }
@@ -243,6 +291,8 @@ impl FreematicsFrame {
                     name: definition.description.to_string(),
                     unit: definition.unit.to_string(),
                     value: field.values[0],
+                    display_value: None,
+                    raw_bytes: None,
                     age_ms,
                     // The Mode 01 support bitmap says nothing about whether
                     // this ECU exposes the PID in Mode 02 frame 0.
@@ -331,12 +381,16 @@ fn exact_u32(value: f64) -> Option<u32> {
     (value >= 0.0 && value <= u32::MAX as f64 && value.fract() == 0.0).then_some(value as u32)
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct FreematicsMeasurement {
     pub cmd: String,
     pub name: String,
     pub unit: String,
     pub value: f64,
+    /// Structured SAE rendering for status PIDs; numeric `value` remains the
+    /// firmware's existing normalized scalar for charts and compatibility.
+    pub display_value: Option<obd::ObdValue>,
+    pub raw_bytes: Option<Vec<u8>>,
     pub age_ms: Option<u32>,
     pub supported: Option<bool>,
 }
@@ -458,6 +512,9 @@ pub fn parse_line(line: &[u8]) -> Option<FreematicsFrame> {
     let mut vin = None;
     let mut calibration_id = None;
     let mut ecu_name = None;
+    let mut raw_mode01 = None;
+    let mut raw_mode01_seen = false;
+    let mut raw_mode01_invalid = false;
     for item in suffix {
         if let Some(value) = item.strip_prefix("vin=") {
             if vin.is_some()
@@ -474,6 +531,20 @@ pub fn parse_line(line: &[u8]) -> Option<FreematicsFrame> {
         } else if let Some(value) = item.strip_prefix("ecu=") {
             if ecu_name.is_none() {
                 ecu_name = decode_identity_metadata(value);
+            }
+        } else if let Some(value) = item.strip_prefix("raw=") {
+            if raw_mode01_seen {
+                // Raw data is optional metadata outside the serialized sample
+                // checksum. A duplicate makes the extension ambiguous, but
+                // must not discard otherwise valid timestamped measurements.
+                raw_mode01_invalid = true;
+                raw_mode01 = None;
+            } else {
+                raw_mode01_seen = true;
+                match decode_raw_mode01(value) {
+                    Some(decoded) => raw_mode01 = Some(decoded),
+                    None => raw_mode01_invalid = true,
+                }
             }
         }
     }
@@ -533,6 +604,11 @@ pub fn parse_line(line: &[u8]) -> Option<FreematicsFrame> {
         capture_utc_ms,
         dropped_records,
         supported_pids,
+        raw_mode01: if raw_mode01_invalid {
+            HashMap::new()
+        } else {
+            raw_mode01.unwrap_or_default()
+        },
         vin,
         calibration_id,
         ecu_name,
@@ -541,6 +617,50 @@ pub fn parse_line(line: &[u8]) -> Option<FreematicsFrame> {
         corrupt_sample_hex: None,
         reader_drops: 0,
     })
+}
+
+fn raw_mode01_widths() -> &'static HashMap<u8, usize> {
+    static WIDTHS: OnceLock<HashMap<u8, usize>> = OnceLock::new();
+    WIDTHS.get_or_init(|| {
+        obd::mode01_pids()
+            .into_iter()
+            .filter_map(|definition| {
+                let pid = definition.cmd.strip_prefix("01")?;
+                let pid = u8::from_str_radix(pid, 16).ok()?;
+                // PidDef.bytes includes the positive-service and PID bytes.
+                let width = definition.bytes.checked_sub(2)? as usize;
+                (width > 0 && width <= 4).then_some((pid, width))
+            })
+            .collect()
+    })
+}
+
+fn decode_raw_mode01(text: &str) -> Option<HashMap<u8, Vec<u8>>> {
+    if text.is_empty() {
+        return None;
+    }
+    let mut output = HashMap::new();
+    for entry in text.split(',') {
+        let (pid, hex) = entry.split_once(':')?;
+        if pid.len() != 2 || hex.len() % 2 != 0 {
+            return None;
+        }
+        let pid = u8::from_str_radix(pid, 16).ok()?;
+        let width = *raw_mode01_widths().get(&pid)?;
+        if hex.len() != width * 2 || output.contains_key(&pid) {
+            return None;
+        }
+        let bytes = hex
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|pair| {
+                let pair = std::str::from_utf8(pair).ok()?;
+                u8::from_str_radix(pair, 16).ok()
+            })
+            .collect::<Option<Vec<_>>>()?;
+        output.insert(pid, bytes);
+    }
+    Some(output)
 }
 
 fn decode_identity_metadata(encoded: &str) -> Option<String> {
@@ -634,37 +754,24 @@ impl FreematicsUsb {
 
         let mut failures = Vec::new();
         for candidate in candidates {
-            let mut device = match Self::connect(&candidate) {
+            let device = match Self::connect(&candidate) {
                 Ok(device) => device,
                 Err(error) => {
                     failures.push(error);
                     continue;
                 }
             };
-            // Listen only: do not send ELM or diagnostic commands. A valid
-            // TeleLogger frame is the protocol identity proof.
-            // Linux may pulse DTR while opening a USB serial device, which
-            // resets some ESP32/CH340 combinations despite preserving DTR in
-            // the builder. Allow the firmware to finish booting and emit its
-            // first frame instead of treating that expected restart as a
-            // failed protocol probe.
-            let startup_deadline = Instant::now() + AUTO_CONNECT_STARTUP_TIMEOUT;
-            while Instant::now() < startup_deadline {
-                match device.read_frames() {
-                    Ok(frames) if !frames.is_empty() => return Ok((device, frames)),
-                    Ok(_) => thread::sleep(Duration::from_millis(10)),
-                    Err(error) => {
-                        failures.push(error);
-                        break;
-                    }
-                }
-            }
+            // Keep the single identified port open while telemetry is pending.
+            // Reopening after a short protocol timeout can repeat Linux tty
+            // modem-control transitions. The worker promotes this to Connected
+            // only after receiving a valid checksummed FT1 frame.
+            return Ok((device, Vec::new()));
         }
         let detail = if failures.is_empty() {
-            "USB serial ports produced no valid @FT1 telemetry frame".to_string()
+            "No supported Freematics USB serial port could be opened".to_string()
         } else {
             format!(
-                "No USB serial port produced valid @FT1 telemetry; {} open/read error(s)",
+                "No supported Freematics USB serial port could be opened; {} open error(s)",
                 failures.len()
             )
         };
@@ -1071,6 +1178,100 @@ mod tests {
                 .values,
             [720.0]
         );
+    }
+
+    #[test]
+    fn parses_structured_raw_mode01_bytes_and_decodes_compound_components() {
+        let payload = "CAR#101:133,103:2,114:0.5,124:2,134:0";
+        let checksum = payload
+            .bytes()
+            .fold(0u8, |sum, byte| sum.wrapping_add(byte));
+        let line = format!(
+            "@FT1,42,100,0,0,0,01,03,04,0C,14,24,34,42,A6;raw=01:85080100,03:0201,04:80,0C:0320,14:6490,24:80004000,34:80008000,42:3854,A6:00000010|{payload}*{checksum:02X}"
+        );
+        let frame = parse_line(line.as_bytes()).unwrap();
+        assert_eq!(frame.raw_mode01[&0x01], [0x85, 0x08, 0x01, 0x00]);
+        assert_eq!(frame.raw_mode01[&0x04], [0x80]);
+        assert_eq!(frame.raw_mode01[&0x0C], [0x03, 0x20]);
+        assert_eq!(frame.raw_mode01[&0x14], [0x64, 0x90]);
+        assert_eq!(frame.raw_mode01[&0x42], [0x38, 0x54]);
+        assert_eq!(frame.raw_mode01[&0xA6], [0, 0, 0, 0x10]);
+
+        let measurements = frame.measurements();
+        let status = measurements.iter().find(|item| item.cmd == "0101").unwrap();
+        assert!(matches!(
+            status.display_value,
+            Some(obd::ObdValue::StatusResult(ref value)) if value.mil_on && value.dtc_count == 5
+        ));
+        let trim = measurements
+            .iter()
+            .find(|item| item.cmd == "0114-TRIM")
+            .unwrap();
+        assert!((trim.value - 12.5).abs() < 0.001);
+        let lambda_voltage = measurements
+            .iter()
+            .find(|item| item.cmd == "0124-LAMBDA")
+            .unwrap();
+        assert!((lambda_voltage.value - 2.0).abs() < 0.001);
+        let lambda_current = measurements
+            .iter()
+            .find(|item| item.cmd == "0134-LAMBDA")
+            .unwrap();
+        assert!((lambda_current.value - 2.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn raw_mode01_widths_follow_the_dashboard_pid_catalogue() {
+        let widths = raw_mode01_widths();
+        assert_eq!(widths.get(&0x04), Some(&1));
+        assert_eq!(widths.get(&0x0C), Some(&2));
+        assert_eq!(widths.get(&0x14), Some(&2));
+        assert_eq!(widths.get(&0x42), Some(&2));
+        assert_eq!(widths.get(&0xA6), Some(&4));
+        assert!(!widths.contains_key(&0xFF));
+    }
+
+    #[test]
+    fn ignores_invalid_optional_raw_mode01_without_dropping_sample_data() {
+        for suffix in [
+            "raw=14:6400,14:6480",
+            "raw=14:64",
+            "raw=24:800040",
+            "raw=55:01020304",
+        ] {
+            let line = wire_record(1200, 800.0, 0, &format!("0C,0D;{suffix}"));
+            let frame = parse_line(line.trim_end().as_bytes()).expect("base sample should survive");
+            assert!(
+                frame.raw_mode01.is_empty(),
+                "accepted raw metadata {suffix}"
+            );
+            let rpm = frame
+                .measurements()
+                .into_iter()
+                .find(|measurement| measurement.cmd == "010C")
+                .unwrap();
+            assert_eq!(rpm.value, 800.0);
+            assert_eq!(rpm.age_ms, Some(0));
+            assert_eq!(rpm.supported, Some(true));
+        }
+    }
+
+    #[test]
+    fn raw_bytes_only_decode_the_mode01_field_with_the_same_pid() {
+        let payload = "CAR#101:133,10C:800";
+        let checksum = payload
+            .bytes()
+            .fold(0u8, |sum, byte| sum.wrapping_add(byte));
+        let line = format!("@FT1,42,100,0,0,0,01,0C;raw=01:85080100|{payload}*{checksum:02X}");
+        let frame = parse_line(line.as_bytes()).unwrap();
+        let rpm = frame
+            .measurements()
+            .into_iter()
+            .find(|measurement| measurement.cmd == "010C")
+            .unwrap();
+        assert_eq!(rpm.value, 800.0);
+        assert!(rpm.raw_bytes.is_none());
+        assert!(rpm.display_value.is_none());
     }
 
     #[test]

@@ -292,10 +292,10 @@ fn append_supported_pid_page(base: u8, data: &[u8], supported: &mut Vec<u8>) -> 
     }
     let bits = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
     // Bitmap bit 0 announces the next 32-PID page; it is not itself a PID.
-    // The remaining bits map to base+1 through base+31.
-    for index in 0..31u16 {
-        if bits & (1u32 << (31 - index)) != 0 {
-            let pid = u16::from(base) + index + 1;
+    // Bits 31 through 1 map to base+1 through base+31.
+    for bit_position in 1..=31u32 {
+        if bits & (1u32 << bit_position) != 0 {
+            let pid = u16::from(base) + (32 - bit_position as u16);
             if pid <= u16::from(u8::MAX) {
                 supported.push(pid as u8);
             }
@@ -415,7 +415,7 @@ mod elm_profile_tests {
     }
 
     #[test]
-    fn supported_pid_pages_follow_continuations_and_include_extended_odometer() {
+    fn supported_pid_continuation_only_pages_do_not_add_pids() {
         let mut supported = Vec::new();
         assert_eq!(
             append_supported_pid_page(0x00, &[0, 0, 0, 1], &mut supported),
@@ -425,20 +425,51 @@ mod elm_profile_tests {
             supported.is_empty(),
             "continuation bit is not a supported PID"
         );
+        assert_eq!(
+            append_supported_pid_page(0x20, &[0, 0, 0, 1], &mut supported),
+            Some(true)
+        );
+        assert!(supported.is_empty());
+    }
+
+    #[test]
+    fn supported_pid_pages_decode_map_across_continuations() {
+        let mut supported = Vec::new();
+
+        // 0100 reports PID 01 and announces 0120. Bit 0 must not become PID 20.
+        assert_eq!(
+            append_supported_pid_page(0x00, &[0x80, 0, 0, 1], &mut supported),
+            Some(true)
+        );
+        assert_eq!(supported, vec![0x01]);
+
+        // 0120 reports PID 21 and announces 0140. Bit 0 must not become PID 40.
+        assert_eq!(
+            append_supported_pid_page(0x20, &[0x80, 0, 0, 1], &mut supported),
+            Some(true)
+        );
+        assert_eq!(supported, vec![0x01, 0x21]);
+
+        // 0140 reports PID 5F and stops; the lowest PID bit is still reserved.
+        assert_eq!(
+            append_supported_pid_page(0x40, &[0, 0, 0, 2], &mut supported),
+            Some(false)
+        );
+        assert_eq!(supported, vec![0x01, 0x21, 0x5F]);
 
         // PID A6 is bit 6 of the 01A0 page; bit 0 announces a 01C0 page.
         assert_eq!(
             append_supported_pid_page(0xA0, &[0x04, 0, 0, 1], &mut supported),
             Some(true)
         );
-        assert_eq!(supported, vec![0xA6]);
+        assert_eq!(supported, vec![0x01, 0x21, 0x5F, 0xA6]);
 
         // The terminal 01C0 page has no continuation page in the standard map.
         assert_eq!(
             append_supported_pid_page(0xC0, &[0, 0, 0, 1], &mut supported),
             Some(false)
         );
-        assert_eq!(supported, vec![0xA6]);
+        assert_eq!(supported, vec![0x01, 0x21, 0x5F, 0xA6]);
         assert_eq!(
             append_supported_pid_page(0x00, &[1, 2, 3], &mut supported),
             None

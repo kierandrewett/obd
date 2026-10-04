@@ -16,6 +16,20 @@ Desktop serial, TCP and J2534 connections share the same worker and operations. 
 Web Serial and the development WebSocket emulator. A native bridge would be required for browser
 access to J2534 DLLs. This change does not introduce such a bridge.
 
+## Corsa D medium-speed CAN (experimental)
+
+The desktop serial ELM profile sends `AT PB 91 06` followed by `ATSPB`: protocol B options `91`
+select 11-bit ISO-TP with the ELM 8/7 baud multiplier, and divisor `06` gives approximately
+95.238 kbit/s. It then tries the standard OBD-II `0100` request. A selected MS-CAN bus can be
+reachable while having no generic OBD responder; that is represented as an explicit no-responder
+state, with no silent retry on HS-CAN. The profile is not a raw CAN logger and does not implement
+Opel body-module addressing, discovery, or decoding. The adapter's HS/MS switch remains manual.
+
+The ELM parameter interpretation follows the [ELM327 datasheet](https://www.elmelectronics.com/wp-content/uploads/2017/01/ELM327DS.pdf),
+which specifies that `PB` sets User Protocol B CAN options/baud rate. A [Corsa D CAN bus field report](https://blog.ajwilson.me/posts/2021-05-06-reading-corsa-d-canbus/)
+reports approximately 95 kbit/s for the medium-speed network. This profile has simulator coverage
+only; it has not been verified with the user's reader or vehicle.
+
 ## J2534 contract
 
 - Version 04.04 exports, Windows calling convention and 32-bit integer fields.

@@ -5,9 +5,19 @@ TeleLogger `@FT1` stream. Auto-detect considers only the Model B's CP210x USB
 bridge (VID:PID `10c4:ea60`), then accepts it only after parsing a checksummed
 telemetry record. Generic CH340 OBD adapters and other serial devices are
 rejected before the app opens a port. It sends no ELM or diagnostic commands.
-The app preserves DTR and never asserts DTR or RTS itself. Linux's tty layer can
-still pulse DTR during open despite that setting, which may reset the ESP32;
-the app waits up to 12 seconds for the device's first frame after opening. Keep
+The app preserves DTR and never asserts DTR or RTS itself. This does not
+guarantee quiet control lines: Linux's tty open path may assert DTR/RTS before
+the app can change their state. The installed
+[`serialport` 4.9.0 API docs](https://docs.rs/serialport/4.9.0/serialport/struct.SerialPortBuilder.html#method.dtr_on_open)
+specifically warn that Linux briefly asserts DTR even when explicitly asked
+not to. Freematics'
+[published ONE+ R14 schematic](https://freematics.com/dl/schematics_oneplus_r14_20190612.pdf)
+shows the CP2102 DTR/RTS nets connected to the ESP32 boot/reset circuit, but
+the exact revision and wiring of the connected unit have not been verified
+here. A reset on open is
+therefore plausible, not confirmed. Auto-detect waits up to 12 seconds for the
+device's first frame after opening; this accommodates a boot cycle but does
+not prevent one. Repeatedly opening the same port can repeat the risk. Keep
 one reader on the selected port; a serial monitor must not share it with the
 dashboard.
 
@@ -82,9 +92,11 @@ connected to the car and laptop.
   with a 100 ms repaint interval while Freematics is connected, without
   enabling diagnostic polling.
 - The user's initial connection log shows auto-detect timing out after about
-  1.7 s. Linux's serialport documentation warns that opening a port can pulse
-  DTR and reset ESP32/CH340 devices even when DTR is preserved. Auto-detect now
-  waits up to 12 s for a valid checksummed frame to allow that boot cycle.
+  1.7 s. The app now waits up to 12 s for a valid checksummed frame. Linux may
+  assert DTR/RTS during the underlying tty open despite the app preserving
+  DTR; a reset is possible, but this was not measured on the Model B during
+  this session. The timeout allows recovery if it occurs; it does not avoid
+  it.
 
 ## Current USB and diagnostics changes
 
@@ -101,8 +113,15 @@ records, stale-backlog dropping, sequence/checksum integrity, and concurrent
 single-producer/single-consumer stress. It is a host simulation, not a
 measurement of vehicle sampling or upload latency under a saturated UART.
 
-FT1's supported-PID header can now append a validated optional `;vin=` value.
-The dashboard shows that device-reported VIN and supported Mode 01 inventory.
+FT1's supported-PID header can append validated optional `;vin=`, `;cal=`,
+`;ecu=`, and `;raw=` metadata. The dashboard shows device-reported identity
+and supported Mode 01 inventory. The raw extension preserves full response
+bytes for PIDs 01, 02, 03, 14–1B, 24–2B, and 34–3B from the firmware's existing
+polls; the dashboard decodes readiness/fuel status and compound oxygen-sensor
+values from those bytes without issuing additional ECU requests. If the
+optional raw extension is malformed or ambiguous, the dashboard ignores that
+extension but retains the checksummed numeric sample, support status, and
+measurement ages. A raw value is only used for the row with the matching PID.
 The firmware already has an 87-entry generic Mode 01 catalogue; at runtime it
 reports and polls only PIDs the connected ECU advertises. It does not invent
 support or refresh a failed reading's timestamp. The firmware's periodic
@@ -119,7 +138,8 @@ a two-second reader-queue delay and verifies RPM is still shown stale at its
 real age. This covers software queue latency; it does not measure USB arrival
 latency on a physical Model B.
 
-Parser and app tests cover VIN validation, DTC status/count/code/age semantics,
+Parser and app tests cover raw Mode 01 metadata widths and decoding, VIN
+validation, DTC status/count/code/age semantics,
 unscanned versus successful-empty scans, and passive UI behavior. The repeatable
 serial fixture still covers RPM/voltage dips, actual per-PID ages, partial and
 corrupt input, debug lines, and a device restart. A separate app regression test

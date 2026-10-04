@@ -232,6 +232,7 @@ fn obd_worker(
 
     let mut elm: Option<AnyAdapter> = None;
     let mut freematics: Option<freematics_usb::FreematicsUsb> = None;
+    let mut freematics_pending_connection: Option<elm327::ConnectionInfo> = None;
     let mut reader_drops = TelemetryReaderDropCounter::default();
     let mut live_running = false;
     let mut poll_config = PollConfig::default();
@@ -260,6 +261,7 @@ fn obd_worker(
                 } => {
                     elm = None;
                     freematics = None;
+                    freematics_pending_connection = None;
                     live_running = false;
                     current_make = None;
                     let _ =
@@ -288,6 +290,7 @@ fn obd_worker(
                 OdbCmd::ConnectAdapter(config) => {
                     elm = None;
                     freematics = None;
+                    freematics_pending_connection = None;
                     live_running = false;
                     current_make = None;
                     let _ = event_tx.send(ObdEvent::Connecting("Connecting to adapter...".into()));
@@ -315,6 +318,7 @@ fn obd_worker(
                 OdbCmd::ConnectFreematicsUsb(port) => {
                     elm = None;
                     freematics = None;
+                    freematics_pending_connection = None;
                     live_running = false;
                     current_make = None;
                     let _ = event_tx.send(ObdEvent::Connecting(
@@ -335,10 +339,17 @@ fn obd_worker(
                                 elm_version: "Passive TeleLogger USB stream".into(),
                                 voltage: None,
                             };
-                            let _ = event_tx.send(ObdEvent::Connected(info));
+                            let _ = event_tx.send(ObdEvent::Connecting(format!(
+                                "Listening on {} for a checksummed Freematics telemetry frame; port stays open",
+                                info.port
+                            )));
+                            freematics_pending_connection = Some(info);
                             freematics = Some(device);
                             reader_drops.reset();
                             for frame in initial_frames {
+                                if let Some(info) = freematics_pending_connection.take() {
+                                    let _ = event_tx.send(ObdEvent::Connected(info));
+                                }
                                 let _ = enqueue_telemetry_frame(
                                     frame,
                                     &telemetry_tx,
@@ -355,6 +366,7 @@ fn obd_worker(
                 OdbCmd::Disconnect => {
                     elm = None;
                     freematics = None;
+                    freematics_pending_connection = None;
                     live_running = false;
                     let _ = event_tx.send(ObdEvent::Disconnected);
                 }
@@ -429,6 +441,7 @@ fn obd_worker(
                 OdbCmd::ConnectLocal { ws_port } => {
                     elm = None;
                     freematics = None;
+                    freematics_pending_connection = None;
                     live_running = false;
                     current_make = None;
                     #[cfg(debug_assertions)]
@@ -459,7 +472,7 @@ fn obd_worker(
                         }
                     }
                     #[cfg(not(debug_assertions))]
-                    drop(ws_port);
+                    let _ = ws_port;
                 }
 
                 OdbCmd::Shutdown => {
@@ -474,6 +487,9 @@ fn obd_worker(
             match device.read_frames() {
                 Ok(frames) => {
                     for frame in frames {
+                        if let Some(info) = freematics_pending_connection.take() {
+                            let _ = event_tx.send(ObdEvent::Connected(info));
+                        }
                         match enqueue_telemetry_frame(frame, &telemetry_tx, &mut reader_drops) {
                             TelemetryEnqueueResult::Enqueued | TelemetryEnqueueResult::Dropped => {}
                             TelemetryEnqueueResult::Disconnected => {
@@ -484,9 +500,15 @@ fn obd_worker(
                     }
                 }
                 Err(error) => {
-                    let _ = event_tx.send(ObdEvent::Error(error));
+                    if freematics_pending_connection.take().is_some() {
+                        let _ = event_tx.send(ObdEvent::ConnectionFailed(format!(
+                            "Freematics port opened but telemetry read failed: {error}"
+                        )));
+                    } else {
+                        let _ = event_tx.send(ObdEvent::Error(error));
+                        let _ = event_tx.send(ObdEvent::Disconnected);
+                    }
                     telemetry_receiver_closed = true;
-                    let _ = event_tx.send(ObdEvent::Disconnected);
                 }
             }
         }
@@ -584,7 +606,7 @@ fn finish_connection(
 mod telemetry_reader_drop_tests {
     use super::{TelemetryEnqueueResult, TelemetryReaderDropCounter, enqueue_telemetry_frame};
     use crate::freematics_usb::FreematicsFrame;
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
     use std::sync::mpsc;
 
     fn frame() -> FreematicsFrame {
@@ -595,6 +617,7 @@ mod telemetry_reader_drop_tests {
             capture_utc_ms: None,
             dropped_records: 0,
             supported_pids: Some(HashSet::new()),
+            raw_mode01: HashMap::new(),
             vin: None,
             calibration_id: None,
             ecu_name: None,

@@ -25,6 +25,7 @@ A real-time OBD-II diagnostic dashboard for ELM-compatible and J2534 adapters, b
 | Connection | Desktop | Browser | Current diagnostic scope |
 |---|---|---|---|
 | ELM-compatible USB / serial | Yes | Web Serial | Standard OBD using the adapter's implemented protocols |
+| Corsa D MS-CAN ELM profile | Yes, experimental | No | Standard OBD requests over User Protocol B; no body-module scan |
 | ELM-compatible Bluetooth serial | OS serial port required | Depends on browser/OS exposure | Same ELM diagnostic path |
 | ELM-compatible Wi-Fi / TCP | Yes, explicit host and port | Not directly | Same ELM diagnostic path |
 | J2534 04.04 vendor driver | Yes, matching native library required | Not directly | Standard ISO 15765 CAN at 250/500 kbit/s |
@@ -34,6 +35,13 @@ The desktop connection selector is available above the dashboard and on the disc
 Serial connections retain automatic port/baud detection. TCP connections need the adapter's documented
 host and port. Branded ELM-compatible identities such as OBDLink, STN, ELS and vLinker are accepted;
 initialisation also requires successful commands and a valid vehicle response.
+
+The optional **Corsa D MS-CAN** serial profile is separate from automatic HS-CAN OBD. It configures
+ELM User Protocol B at the Corsa D's reported approximately 95.2 kbit/s, then tries the standard
+`0100` supported-PID request. Some MS-CAN segments may have no generic OBD responder; in that case
+the UI explicitly reports that no generic responder was found and does not fall back to HS-CAN.
+This profile does not passively monitor raw frames or discover/read Opel body modules. Select the
+adapter's MS position yourself; the app cannot switch the adapter's physical pins.
 
 ### J2534 setup
 
