@@ -100,9 +100,12 @@ provided by this stream.
 Parser and app tests cover VIN validation, DTC status/count/code/age semantics,
 unscanned versus successful-empty scans, and passive UI behavior. The repeatable
 serial fixture still covers RPM/voltage dips, actual per-PID ages, partial and
-corrupt input, debug lines, and a device restart. The Corsa D MS-CAN profile is
-separate: it configures an ELM-compatible adapter for User Protocol B at about
-95.2 kbit/s and does not add Opel body-module addressing or decoding.
+corrupt input, debug lines, and a device restart. A separate app regression test
+rejects a delayed duplicate/older capture from the same boot (so stale queued
+frames cannot overwrite newer values) while accepting the 32-bit capture clock
+wrap. The Corsa D MS-CAN profile is separate: it configures an ELM-compatible
+adapter for User Protocol B at about 95.2 kbit/s and does not add Opel
+body-module addressing or decoding.
 
 The latest firmware build has not yet been installed in the connected car.
 Live acquisition ages, actual RPM/supply voltage, upload continuity, SD

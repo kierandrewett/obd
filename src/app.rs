@@ -243,6 +243,8 @@ pub struct ObdApp {
     #[cfg(not(target_arch = "wasm32"))]
     freematics_boot_id: Option<u64>,
     #[cfg(not(target_arch = "wasm32"))]
+    freematics_capture_ms: Option<u32>,
+    #[cfg(not(target_arch = "wasm32"))]
     freematics_dropped_records: u32,
     #[cfg(not(target_arch = "wasm32"))]
     freematics_reader_drops: u64,
@@ -564,8 +566,9 @@ impl ObdApp {
             vin: None,
             voltage: None,
             #[cfg(not(target_arch = "wasm32"))]
-            #[cfg(not(target_arch = "wasm32"))]
             freematics_boot_id: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            freematics_capture_ms: None,
             #[cfg(not(target_arch = "wasm32"))]
             freematics_dropped_records: 0,
             #[cfg(not(target_arch = "wasm32"))]
@@ -603,6 +606,7 @@ impl ObdApp {
                         #[cfg(not(target_arch = "wasm32"))]
                         {
                             self.freematics_boot_id = None;
+                            self.freematics_capture_ms = None;
                             self.freematics_dropped_records = 0;
                             self.freematics_reader_drops = 0;
                             self.freematics_corrupt_records = 0;
@@ -781,6 +785,14 @@ impl ObdApp {
     #[cfg(not(target_arch = "wasm32"))]
     fn apply_freematics_frame(&mut self, frame: crate::freematics_usb::FreematicsFrame) {
         let received_at = Instant::now();
+        if self.freematics_boot_id == Some(frame.boot_id)
+            && self.freematics_capture_ms.is_some_and(|previous| {
+                let elapsed = frame.capture_ms.wrapping_sub(previous);
+                elapsed == 0 || elapsed >= (1 << 31)
+            })
+        {
+            return;
+        }
         if let Some(previous) = self.freematics_boot_id
             && previous != frame.boot_id
         {
@@ -795,6 +807,7 @@ impl ObdApp {
         let previous_reader_drops = self.freematics_reader_drops;
         let previous_corrupt_records = self.freematics_corrupt_records;
         self.freematics_boot_id = Some(frame.boot_id);
+        self.freematics_capture_ms = Some(frame.capture_ms);
         self.freematics_dropped_records = frame.dropped_records;
         self.freematics_reader_drops = frame.reader_drops;
         self.supported_pids = frame
@@ -2875,6 +2888,39 @@ mod adapter_ui_tests {
                 .map(|point| point.value)
                 .collect::<Vec<_>>(),
             [810.0]
+        );
+    }
+
+    #[test]
+    fn freematics_rejects_replayed_capture_but_accepts_counter_wrap() {
+        let (commands, _command_rx) = mpsc::channel();
+        let (_events, event_rx) = mpsc::channel();
+        let (_telemetry_tx, telemetry_rx) = mpsc::channel();
+        let mut app = ObdApp::new_state(commands, event_rx, telemetry_rx, None);
+        app.connection_kind = ConnectionKind::FreematicsUsb;
+
+        let frame_for = |capture: u32, rpm: u32| {
+            let payload = format!("ABCDEF#0:{capture},10C:{rpm},40C:5");
+            let checksum = payload
+                .bytes()
+                .fold(0u8, |sum, byte| sum.wrapping_add(byte));
+            let wire = format!("@FT1,42,{capture},0,0,0,0C|{payload}*{checksum:02X}");
+            crate::freematics_usb::parse_line(wire.as_bytes()).unwrap()
+        };
+
+        app.apply_freematics_frame(frame_for(u32::MAX - 10, 820));
+        app.apply_freematics_frame(frame_for(u32::MAX - 20, 100));
+        assert_eq!(
+            app.live_data.get("010C").unwrap().numeric_value,
+            820.0,
+            "a delayed capture from this boot must not overwrite newer telemetry"
+        );
+
+        app.apply_freematics_frame(frame_for(20, 540));
+        assert_eq!(
+            app.live_data.get("010C").unwrap().numeric_value,
+            540.0,
+            "the device capture counter may wrap from u32::MAX to zero"
         );
     }
 }
