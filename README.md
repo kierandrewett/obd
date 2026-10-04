@@ -6,7 +6,8 @@ A real-time OBD-II diagnostic dashboard for ELM-compatible and J2534 adapters, b
 
 - **Auto-detection** - Automatically finds your ELM327 adapter (USB, Bluetooth, serial) and negotiates baud rate and OBD protocol
 - **Live gauges** - Radial gauges for RPM, speed, coolant temp, oil temp, throttle, engine load with color-coded warning/danger thresholds
-- **60+ PIDs** - Supports all standard Mode 01 PIDs: temperatures, pressures, fuel trims, O2 sensors, catalyst temps, and more
+- **90 Mode 01 PID definitions** - Temperatures, pressures, fuel trims, O2 voltage/current, torque, pedal, evaporative-system data, odometer, and more; the ECU's support bitmap determines which readings are available
+- **Freematics USB telemetry** - Passively displays the firmware's current acquisition stream in the same sensor view, preserving per-reading age and support status without starting a second ECU polling loop
 - **Bar gauges + sparklines** - Secondary sensors shown as bar gauges, with trend sparklines for key values
 - **DTC reading** - Read stored and pending diagnostic trouble codes. Codes appear instantly; descriptions are looked up in the background from a database of 21,000+ manufacturer-specific codes across 37 makes
 - **Smart DTC descriptions** - Descriptions are sourced in priority order: manufacturer-specific → corporate family alias (e.g. Opel → GM) → SAE J2012 generic. Source attribution is shown in the table so you know where each description came from

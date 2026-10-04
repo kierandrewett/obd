@@ -490,6 +490,67 @@ mod tests {
     }
 
     #[test]
+    fn exposes_firmware_odometer_pid_with_capture_age_and_support_status() {
+        let payload = "ABCDEF#0:100,1A6:123456.7,4A6:500";
+        let checksum = payload
+            .bytes()
+            .fold(0u8, |sum, byte| sum.wrapping_add(byte));
+        let line = format!("@FT1,42,100,1,1790966400000,0,A6|{payload}*{checksum:02X}");
+        let frame = parse_line(line.as_bytes()).unwrap();
+        let measurements = frame.measurements();
+
+        assert_eq!(measurements.len(), 1);
+        assert_eq!(measurements[0].cmd, "01A6");
+        assert_eq!(measurements[0].name, "Vehicle odometer");
+        assert_eq!(measurements[0].unit, "km");
+        assert_eq!(measurements[0].value, 123456.7);
+        assert_eq!(measurements[0].age_ms, Some(500));
+        assert_eq!(measurements[0].supported, Some(true));
+    }
+
+    #[test]
+    fn maps_all_firmware_extended_mode01_pids_into_live_measurements() {
+        let pids = [
+            0x1A, 0x1B, 0x1E, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x2B, 0x35, 0x36, 0x37, 0x38, 0x39,
+            0x3A, 0x3B, 0x4B, 0x53, 0x54, 0x59, 0x5A, 0x61, 0x62, 0x63, 0xA6,
+        ];
+        let fields = pids
+            .iter()
+            .flat_map(|pid| [format!("1{pid:02X}:1"), format!("4{pid:02X}:25")])
+            .collect::<Vec<_>>()
+            .join(",");
+        let payload = format!("ABCDEF#0:100,{fields}");
+        let checksum = payload
+            .bytes()
+            .fold(0u8, |sum, byte| sum.wrapping_add(byte));
+        let supported = pids
+            .iter()
+            .map(|pid| format!("{pid:02X}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let line = format!("@FT1,42,100,1,1790966400000,0,{supported}|{payload}*{checksum:02X}");
+
+        let frame = parse_line(line.as_bytes()).unwrap();
+        let measurements = frame.measurements();
+        let commands = measurements
+            .iter()
+            .map(|measurement| measurement.cmd.as_str())
+            .collect::<std::collections::HashSet<_>>();
+
+        assert_eq!(measurements.len(), pids.len());
+        for pid in pids {
+            let command = format!("01{pid:02X}");
+            assert!(commands.contains(command.as_str()), "missing {command}");
+            let measurement = measurements
+                .iter()
+                .find(|measurement| measurement.cmd == command)
+                .unwrap();
+            assert_eq!(measurement.age_ms, Some(25), "age for {command}");
+            assert_eq!(measurement.supported, Some(true), "support for {command}");
+        }
+    }
+
+    #[test]
     fn parses_valid_optional_vin_suffix_without_changing_supported_pids() {
         let line = wire_record(1200, 720.0, 125, "0C,0D;vin=1HGCM82633A004352");
         let frame = parse_line(line.trim_end().as_bytes()).unwrap();

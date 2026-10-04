@@ -4,6 +4,8 @@ pub mod dtc_database;
 pub mod dtc_descriptions;
 pub mod elm327;
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(dead_code)]
+// The CLI binary owns the runtime USB connection; the library copy supports parser tests.
 mod freematics_usb;
 pub mod gauges;
 pub mod obd;

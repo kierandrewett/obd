@@ -134,11 +134,9 @@ pub fn block_on<F: std::future::Future>(f: F) -> F::Output {
     let waker = unsafe { Waker::from_raw(make_noop_waker()) };
     let mut cx = Context::from_waker(&waker);
     let mut f = std::pin::pin!(f);
-    loop {
-        match f.as_mut().poll(&mut cx) {
-            Poll::Ready(val) => return val,
-            Poll::Pending => panic!("desktop ElmAdapter future must not return Pending"),
-        }
+    match f.as_mut().poll(&mut cx) {
+        Poll::Ready(val) => val,
+        Poll::Pending => panic!("desktop ElmAdapter future must not return Pending"),
     }
 }
 
@@ -442,7 +440,7 @@ impl ElmAdapter for WsElm327 {
     async fn send(&mut self, cmd: &str, _timeout_ms: u64) -> Result<Vec<String>, Elm327Error> {
         use tungstenite::Message;
         self.ws
-            .send(Message::Text(cmd.to_string().into()))
+            .send(Message::Text(cmd.to_string()))
             .map_err(|e| Elm327Error::Serial(format!("WS send: {e}")))?;
         let msg = self
             .ws

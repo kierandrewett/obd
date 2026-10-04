@@ -28,6 +28,7 @@ pub enum Unit {
     Km,
     Milliamps,
     Pa,
+    Nm,
     LitersPerHour,
     Ratio,
     Count,
@@ -49,6 +50,7 @@ impl fmt::Display for Unit {
             Unit::Km => write!(f, "km"),
             Unit::Milliamps => write!(f, "mA"),
             Unit::Pa => write!(f, "Pa"),
+            Unit::Nm => write!(f, "Nm"),
             Unit::LitersPerHour => write!(f, "L/h"),
             Unit::Ratio => write!(f, "λ"),
             Unit::Count => write!(f, ""),
@@ -60,41 +62,45 @@ impl fmt::Display for Unit {
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Decoder {
-    Percent,           // A * 100 / 255
-    PercentCentered,   // (A - 128) * 100 / 128
-    Temp,              // A - 40
-    Rpm,               // (A*256 + B) / 4
-    Speed,             // A
-    TimingAdvance,     // A / 2 - 64
-    Maf,               // (A*256 + B) / 100
-    FuelPressure,      // A * 3
-    Pressure,          // A
-    SensorVoltage,     // A / 200, (B - 128) * 100/128
-    ControlModuleVolt, // (A*256 + B) / 1000
-    AbsoluteLoad,      // (A*256 + B) * 100 / 255
-    EquivRatio,        // (A*256 + B) / 32768
-    EvapPressure,      // ((A*256) + B) / 4  (signed)
-    AbsEvapPressure,   // (A*256 + B) / 200
-    EvapPressureAlt,   // A*256 + B - 32767
-    InjectTiming,      // ((A*256 + B) / 128) - 210
-    FuelRate,          // (A*256 + B) / 20
-    RunTime,           // A*256 + B
-    DistanceU16,       // A*256 + B
-    MaxMaf,            // A * 10
-    O2WrVoltage,       // ((A*256+B)/32768)*2, ((C*256+D)/256)-128  -> voltage part
-    O2WrCurrent,       // ((A*256+B)/32768)*2, ((C*256+D)/256)-128  -> current part
-    CatalystTemp,      // (A*256 + B) / 10 - 40
-    Count,             // A
-    Pid,               // bitmask
-    Status,            // special
-    FuelStatus,        // special
-    AirStatus,         // special
-    ObdCompliance,     // lookup
-    FuelType,          // lookup
-    SingleDtc,         // special
-    Dtc,               // special
-    EncodedString,     // ASCII
-    Drop,              // ignore
+    Percent,             // A * 100 / 255
+    PercentCentered,     // (A - 128) * 100 / 128
+    Temp,                // A - 40
+    Rpm,                 // (A*256 + B) / 4
+    Speed,               // A
+    TimingAdvance,       // A / 2 - 64
+    Maf,                 // (A*256 + B) / 100
+    FuelPressure,        // A * 3
+    Pressure,            // A
+    SensorVoltage,       // A / 200, (B - 128) * 100/128
+    ControlModuleVolt,   // (A*256 + B) / 1000
+    AbsoluteLoad,        // (A*256 + B) * 100 / 255
+    EquivRatio,          // (A*256 + B) / 32768
+    EvapPressure,        // ((A*256) + B) / 4  (signed)
+    AbsEvapPressure,     // (A*256 + B) / 200
+    FuelRailPressureAbs, // (A*256 + B) * 10 kPa
+    EvapPressureAlt,     // A*256 + B - 32767
+    TorquePercent,       // A - 125
+    UnsignedU16,         // A*256 + B
+    InjectTiming,        // ((A*256 + B) / 128) - 210
+    FuelRate,            // (A*256 + B) / 20
+    RunTime,             // A*256 + B
+    DistanceU16,         // A*256 + B
+    OdometerU32,         // (A*2^24 + B*2^16 + C*2^8 + D) / 10 km
+    MaxMaf,              // A * 10
+    O2WrVoltage,         // ((A*256+B)/32768)*2, ((C*256+D)/256)-128  -> voltage part
+    O2WrCurrent,         // ((A*256+B)/32768)*2, ((C*256+D)/256)-128  -> current part
+    CatalystTemp,        // (A*256 + B) / 10 - 40
+    Count,               // A
+    Pid,                 // bitmask
+    Status,              // special
+    FuelStatus,          // special
+    AirStatus,           // special
+    ObdCompliance,       // lookup
+    FuelType,            // lookup
+    SingleDtc,           // special
+    Dtc,                 // special
+    EncodedString,       // ASCII
+    Drop,                // ignore
 }
 
 #[allow(dead_code)]
@@ -428,6 +434,36 @@ pub fn mode01_pids() -> Vec<PidDef> {
             max: 1.275,
         },
         PidDef {
+            cmd: "011A",
+            name: "O2_B2S3",
+            description: "O2: Bank 2 - Sensor 3 Voltage",
+            bytes: 3,
+            decoder: Decoder::SensorVoltage,
+            unit: Unit::Volts,
+            min: 0.0,
+            max: 1.275,
+        },
+        PidDef {
+            cmd: "011B",
+            name: "O2_B2S4",
+            description: "O2: Bank 2 - Sensor 4 Voltage",
+            bytes: 3,
+            decoder: Decoder::SensorVoltage,
+            unit: Unit::Volts,
+            min: 0.0,
+            max: 1.275,
+        },
+        PidDef {
+            cmd: "011E",
+            name: "AUX_INPUT_STATUS",
+            description: "Auxiliary input status (raw bitfield)",
+            bytes: 3,
+            decoder: Decoder::Count,
+            unit: Unit::None,
+            min: 0.0,
+            max: 255.0,
+        },
+        PidDef {
             cmd: "011C",
             name: "OBD_COMPLIANCE",
             description: "OBD Standards Compliance",
@@ -501,6 +537,66 @@ pub fn mode01_pids() -> Vec<PidDef> {
             cmd: "0125",
             name: "O2_S2_WR_VOLTAGE",
             description: "O2 Sensor 2 WR Lambda Voltage",
+            bytes: 6,
+            decoder: Decoder::O2WrVoltage,
+            unit: Unit::Volts,
+            min: 0.0,
+            max: 8.0,
+        },
+        PidDef {
+            cmd: "0126",
+            name: "O2_S3_WR_VOLTAGE",
+            description: "O2 Sensor 3 WR Lambda Voltage",
+            bytes: 6,
+            decoder: Decoder::O2WrVoltage,
+            unit: Unit::Volts,
+            min: 0.0,
+            max: 8.0,
+        },
+        PidDef {
+            cmd: "0127",
+            name: "O2_S4_WR_VOLTAGE",
+            description: "O2 Sensor 4 WR Lambda Voltage",
+            bytes: 6,
+            decoder: Decoder::O2WrVoltage,
+            unit: Unit::Volts,
+            min: 0.0,
+            max: 8.0,
+        },
+        PidDef {
+            cmd: "0128",
+            name: "O2_S5_WR_VOLTAGE",
+            description: "O2 Sensor 5 WR Lambda Voltage",
+            bytes: 6,
+            decoder: Decoder::O2WrVoltage,
+            unit: Unit::Volts,
+            min: 0.0,
+            max: 8.0,
+        },
+        PidDef {
+            cmd: "0129",
+            name: "O2_S6_WR_VOLTAGE",
+            description: "O2 Sensor 6 WR Lambda Voltage",
+            bytes: 6,
+            decoder: Decoder::O2WrVoltage,
+            unit: Unit::Volts,
+            min: 0.0,
+            max: 8.0,
+        },
+        PidDef {
+            cmd: "012A",
+            name: "O2_S7_WR_VOLTAGE",
+            description: "O2 Sensor 7 WR Lambda Voltage",
+            bytes: 6,
+            decoder: Decoder::O2WrVoltage,
+            unit: Unit::Volts,
+            min: 0.0,
+            max: 8.0,
+        },
+        PidDef {
+            cmd: "012B",
+            name: "O2_S8_WR_VOLTAGE",
+            description: "O2 Sensor 8 WR Lambda Voltage",
             bytes: 6,
             decoder: Decoder::O2WrVoltage,
             unit: Unit::Volts,
@@ -591,6 +687,76 @@ pub fn mode01_pids() -> Vec<PidDef> {
             cmd: "0134",
             name: "O2_S1_WR_CURRENT",
             description: "O2 Sensor 1 WR Lambda Current",
+            bytes: 6,
+            decoder: Decoder::O2WrCurrent,
+            unit: Unit::Milliamps,
+            min: -128.0,
+            max: 128.0,
+        },
+        PidDef {
+            cmd: "0135",
+            name: "O2_S2_WR_CURRENT",
+            description: "O2 Sensor 2 WR Lambda Current",
+            bytes: 6,
+            decoder: Decoder::O2WrCurrent,
+            unit: Unit::Milliamps,
+            min: -128.0,
+            max: 128.0,
+        },
+        PidDef {
+            cmd: "0136",
+            name: "O2_S3_WR_CURRENT",
+            description: "O2 Sensor 3 WR Lambda Current",
+            bytes: 6,
+            decoder: Decoder::O2WrCurrent,
+            unit: Unit::Milliamps,
+            min: -128.0,
+            max: 128.0,
+        },
+        PidDef {
+            cmd: "0137",
+            name: "O2_S4_WR_CURRENT",
+            description: "O2 Sensor 4 WR Lambda Current",
+            bytes: 6,
+            decoder: Decoder::O2WrCurrent,
+            unit: Unit::Milliamps,
+            min: -128.0,
+            max: 128.0,
+        },
+        PidDef {
+            cmd: "0138",
+            name: "O2_S5_WR_CURRENT",
+            description: "O2 Sensor 5 WR Lambda Current",
+            bytes: 6,
+            decoder: Decoder::O2WrCurrent,
+            unit: Unit::Milliamps,
+            min: -128.0,
+            max: 128.0,
+        },
+        PidDef {
+            cmd: "0139",
+            name: "O2_S6_WR_CURRENT",
+            description: "O2 Sensor 6 WR Lambda Current",
+            bytes: 6,
+            decoder: Decoder::O2WrCurrent,
+            unit: Unit::Milliamps,
+            min: -128.0,
+            max: 128.0,
+        },
+        PidDef {
+            cmd: "013A",
+            name: "O2_S7_WR_CURRENT",
+            description: "O2 Sensor 7 WR Lambda Current",
+            bytes: 6,
+            decoder: Decoder::O2WrCurrent,
+            unit: Unit::Milliamps,
+            min: -128.0,
+            max: 128.0,
+        },
+        PidDef {
+            cmd: "013B",
+            name: "O2_S8_WR_CURRENT",
+            description: "O2 Sensor 8 WR Lambda Current",
             bytes: 6,
             decoder: Decoder::O2WrCurrent,
             unit: Unit::Milliamps,
@@ -738,6 +904,16 @@ pub fn mode01_pids() -> Vec<PidDef> {
             max: 100.0,
         },
         PidDef {
+            cmd: "014B",
+            name: "ACCELERATOR_POS_F",
+            description: "Accelerator Pedal Position F",
+            bytes: 3,
+            decoder: Decoder::Percent,
+            unit: Unit::Percent,
+            min: 0.0,
+            max: 100.0,
+        },
+        PidDef {
             cmd: "014C",
             name: "THROTTLE_ACTUATOR",
             description: "Commanded Throttle Actuator",
@@ -788,6 +964,46 @@ pub fn mode01_pids() -> Vec<PidDef> {
             max: 100.0,
         },
         PidDef {
+            cmd: "0153",
+            name: "ABS_EVAP_PRESSURE",
+            description: "Absolute Evaporative System Vapor Pressure",
+            bytes: 4,
+            decoder: Decoder::AbsEvapPressure,
+            unit: Unit::Kpa,
+            min: 0.0,
+            max: 327.675,
+        },
+        PidDef {
+            cmd: "0154",
+            name: "EVAP_PRESSURE_ALT",
+            description: "Evaporative System Vapor Pressure (alternative)",
+            bytes: 4,
+            decoder: Decoder::EvapPressureAlt,
+            unit: Unit::Pa,
+            min: -32767.0,
+            max: 32768.0,
+        },
+        PidDef {
+            cmd: "0159",
+            name: "FUEL_RAIL_PRESSURE_ABSOLUTE",
+            description: "Fuel Rail Pressure (absolute)",
+            bytes: 4,
+            decoder: Decoder::FuelRailPressureAbs,
+            unit: Unit::Kpa,
+            min: 0.0,
+            max: 655350.0,
+        },
+        PidDef {
+            cmd: "015A",
+            name: "ACCELERATOR_POS_RELATIVE",
+            description: "Relative Accelerator Pedal Position",
+            bytes: 3,
+            decoder: Decoder::Percent,
+            unit: Unit::Percent,
+            min: 0.0,
+            max: 100.0,
+        },
+        PidDef {
             cmd: "015B",
             name: "HYBRID_BATTERY_REMAINING",
             description: "Hybrid Battery Pack Remaining Life",
@@ -826,6 +1042,46 @@ pub fn mode01_pids() -> Vec<PidDef> {
             unit: Unit::LitersPerHour,
             min: 0.0,
             max: 3276.75,
+        },
+        PidDef {
+            cmd: "0161",
+            name: "ENGINE_TORQUE_DEMANDED",
+            description: "Driver's Demand Engine Torque",
+            bytes: 3,
+            decoder: Decoder::TorquePercent,
+            unit: Unit::Percent,
+            min: -125.0,
+            max: 130.0,
+        },
+        PidDef {
+            cmd: "0162",
+            name: "ENGINE_TORQUE_ACTUAL",
+            description: "Actual Engine Torque",
+            bytes: 3,
+            decoder: Decoder::TorquePercent,
+            unit: Unit::Percent,
+            min: -125.0,
+            max: 130.0,
+        },
+        PidDef {
+            cmd: "0163",
+            name: "ENGINE_REFERENCE_TORQUE",
+            description: "Engine Reference Torque",
+            bytes: 4,
+            decoder: Decoder::UnsignedU16,
+            unit: Unit::Nm,
+            min: 0.0,
+            max: 65535.0,
+        },
+        PidDef {
+            cmd: "01A6",
+            name: "ODOMETER",
+            description: "Vehicle odometer",
+            bytes: 6,
+            decoder: Decoder::OdometerU32,
+            unit: Unit::Km,
+            min: 0.0,
+            max: 429_496_729.5,
         },
     ]
 }
@@ -969,6 +1225,13 @@ pub fn decode_pid(pid: &PidDef, data: &[u8]) -> ObdValue {
             let b = data[1] as f64;
             ObdValue::Numeric((a * 256.0 + b) / 200.0)
         }
+        Decoder::FuelRailPressureAbs => {
+            if data.len() < 2 {
+                return ObdValue::NoData;
+            }
+            let raw = u16::from_be_bytes([data[0], data[1]]);
+            ObdValue::Numeric(raw as f64 * 10.0)
+        }
         Decoder::EvapPressureAlt => {
             if data.len() < 2 {
                 return ObdValue::NoData;
@@ -977,6 +1240,7 @@ pub fn decode_pid(pid: &PidDef, data: &[u8]) -> ObdValue {
             let b = data[1] as f64;
             ObdValue::Numeric(a * 256.0 + b - 32767.0)
         }
+        Decoder::TorquePercent => ObdValue::Numeric(data[0] as f64 - 125.0),
         Decoder::InjectTiming => {
             if data.len() < 2 {
                 return ObdValue::NoData;
@@ -993,13 +1257,20 @@ pub fn decode_pid(pid: &PidDef, data: &[u8]) -> ObdValue {
             let b = data[1] as f64;
             ObdValue::Numeric((a * 256.0 + b) / 20.0)
         }
-        Decoder::RunTime | Decoder::DistanceU16 => {
+        Decoder::RunTime | Decoder::DistanceU16 | Decoder::UnsignedU16 => {
             if data.len() < 2 {
                 return ObdValue::NoData;
             }
             let a = data[0] as f64;
             let b = data[1] as f64;
             ObdValue::Numeric(a * 256.0 + b)
+        }
+        Decoder::OdometerU32 => {
+            if data.len() < 4 {
+                return ObdValue::NoData;
+            }
+            let raw = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+            ObdValue::Numeric(raw as f64 / 10.0)
         }
         Decoder::MaxMaf => ObdValue::Numeric(data[0] as f64 * 10.0),
         Decoder::O2WrVoltage => {
@@ -1355,5 +1626,126 @@ pub fn parse_encoded_string_response(lines: &[String], response_prefix: &str) ->
         None
     } else {
         Some(trimmed)
+    }
+}
+
+#[cfg(test)]
+mod mode01_tests {
+    use super::{Decoder, ObdValue, Unit, decode_pid, mode01_pids};
+
+    #[test]
+    fn decodes_mode01_odometer_as_tenths_of_a_kilometre() {
+        let pid = mode01_pids()
+            .into_iter()
+            .find(|definition| definition.cmd == "01A6")
+            .expect("firmware odometer PID should have a dashboard definition");
+
+        assert_eq!(pid.bytes, 6);
+        assert_eq!(pid.decoder, Decoder::OdometerU32);
+        assert!(matches!(
+            decode_pid(&pid, &[0x00, 0x00, 0x30, 0x39]),
+            ObdValue::Numeric(value) if value == 1234.5
+        ));
+        assert!(matches!(decode_pid(&pid, &[0x00, 0x01]), ObdValue::NoData));
+    }
+
+    #[test]
+    fn decodes_fuel_rail_pressure_torque_and_reference_torque() {
+        let pids = mode01_pids();
+        let decode = |cmd, data: &[u8]| {
+            let pid = pids
+                .iter()
+                .find(|definition| definition.cmd == cmd)
+                .unwrap_or_else(|| panic!("missing {cmd}"));
+            decode_pid(pid, data)
+        };
+
+        assert!(matches!(
+            decode("0159", &[0x01, 0xD2]),
+            ObdValue::Numeric(4660.0)
+        ));
+        assert!(matches!(decode("0161", &[0x40]), ObdValue::Numeric(-61.0)));
+        assert!(matches!(decode("0162", &[0xFF]), ObdValue::Numeric(130.0)));
+        assert!(matches!(
+            decode("0163", &[0x12, 0x34]),
+            ObdValue::Numeric(4660.0)
+        ));
+        assert!(matches!(decode("0159", &[0x01]), ObdValue::NoData));
+        assert!(matches!(decode("0163", &[0x12]), ObdValue::NoData));
+    }
+
+    #[test]
+    fn decodes_extended_sensor_status_and_pressure_pids() {
+        let pids = mode01_pids();
+        let decode = |cmd, data: &[u8]| {
+            let pid = pids
+                .iter()
+                .find(|definition| definition.cmd == cmd)
+                .unwrap_or_else(|| panic!("missing {cmd}"));
+            decode_pid(pid, data)
+        };
+
+        assert!(matches!(decode("011A", &[0xFF]), ObdValue::Numeric(1.275)));
+        assert!(matches!(decode("011E", &[0x80]), ObdValue::Numeric(128.0)));
+        assert!(matches!(
+            decode("0126", &[0, 0, 0x40, 0]),
+            ObdValue::Numeric(2.0)
+        ));
+        assert!(matches!(
+            decode("0135", &[0, 0, 0x40, 0]),
+            ObdValue::Numeric(-64.0)
+        ));
+        assert!(matches!(decode("014B", &[0xFF]), ObdValue::Numeric(100.0)));
+        assert!(matches!(
+            decode("0153", &[0x27, 0x10]),
+            ObdValue::Numeric(50.0)
+        ));
+        assert!(matches!(
+            decode("0154", &[0x80, 0x00]),
+            ObdValue::Numeric(1.0)
+        ));
+        assert!(matches!(decode("015A", &[0xFF]), ObdValue::Numeric(100.0)));
+        assert!(matches!(decode("0161", &[125]), ObdValue::Numeric(0.0)));
+    }
+
+    #[test]
+    fn firmware_extended_pid_metadata_matches_response_width_and_units() {
+        let pids = mode01_pids();
+        let expected = [
+            ("011A", 3, Unit::Volts),
+            ("011B", 3, Unit::Volts),
+            ("011E", 3, Unit::None),
+            ("0126", 6, Unit::Volts),
+            ("0127", 6, Unit::Volts),
+            ("0128", 6, Unit::Volts),
+            ("0129", 6, Unit::Volts),
+            ("012A", 6, Unit::Volts),
+            ("012B", 6, Unit::Volts),
+            ("0135", 6, Unit::Milliamps),
+            ("0136", 6, Unit::Milliamps),
+            ("0137", 6, Unit::Milliamps),
+            ("0138", 6, Unit::Milliamps),
+            ("0139", 6, Unit::Milliamps),
+            ("013A", 6, Unit::Milliamps),
+            ("013B", 6, Unit::Milliamps),
+            ("014B", 3, Unit::Percent),
+            ("0153", 4, Unit::Kpa),
+            ("0154", 4, Unit::Pa),
+            ("0159", 4, Unit::Kpa),
+            ("015A", 3, Unit::Percent),
+            ("0161", 3, Unit::Percent),
+            ("0162", 3, Unit::Percent),
+            ("0163", 4, Unit::Nm),
+            ("01A6", 6, Unit::Km),
+        ];
+
+        for (cmd, bytes, unit) in expected {
+            let definition = pids
+                .iter()
+                .find(|definition| definition.cmd == cmd)
+                .unwrap_or_else(|| panic!("missing {cmd}"));
+            assert_eq!(definition.bytes, bytes, "response width for {cmd}");
+            assert_eq!(definition.unit, unit, "unit for {cmd}");
+        }
     }
 }

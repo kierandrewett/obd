@@ -2809,12 +2809,13 @@ mod adapter_ui_tests {
         app.connection_kind = ConnectionKind::FreematicsUsb;
 
         let frame_for = |boot: u64, capture: u32, rpm: u32, age: u32| {
-            let payload = format!("ABCDEF#0:{capture},10C:{rpm},40C:{age},24:1375,94:25");
+            let payload =
+                format!("ABCDEF#0:{capture},10C:{rpm},40C:{age},1A6:123456.7,4A6:15,24:1375,94:25");
             let checksum = payload
                 .bytes()
                 .fold(0u8, |sum, byte| sum.wrapping_add(byte));
             let wire =
-                format!("@FT1,{boot},{capture},1,1790966401000,0,0C|{payload}*{checksum:02X}");
+                format!("@FT1,{boot},{capture},1,1790966401000,0,0C,A6|{payload}*{checksum:02X}");
             crate::freematics_usb::parse_line(wire.as_bytes()).unwrap()
         };
 
@@ -2833,6 +2834,19 @@ mod adapter_ui_tests {
                 .map(|point| point.value)
                 .collect::<Vec<_>>(),
             [820.0]
+        );
+        let odometer = app.live_data.get("01A6").unwrap();
+        assert_eq!(odometer.numeric_value, 123456.7);
+        assert_eq!(odometer.unit, "km");
+        assert_eq!(odometer.age_ms, Some(15));
+        assert_eq!(odometer.supported, Some(true));
+        assert_eq!(
+            odometer
+                .history
+                .iter()
+                .map(|point| point.value)
+                .collect::<Vec<_>>(),
+            [123456.7]
         );
 
         app.apply_freematics_frame(frame_for(42, 1250, 540, 1500));
