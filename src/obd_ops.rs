@@ -378,6 +378,7 @@ mod elm_profile_tests {
         assert!(!elm.commands.iter().any(|command| command == "ATSP0"));
         assert_eq!(elm.commands.last().map(String::as_str), Some("ATRV"));
         assert!(elm.info.protocol.contains("95.2 kbit/s"));
+        assert!(elm.info.protocol.contains("no generic OBD responder"));
     }
 
     #[test]
