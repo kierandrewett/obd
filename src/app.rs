@@ -563,7 +563,7 @@ fn show_time_series_values(
         let y = egui::lerp(plot.bottom()..=plot.top(), fraction);
         painter.line_segment(
             [egui::pos2(plot.left(), y), egui::pos2(plot.right(), y)],
-            egui::Stroke::new(0.5, grid),
+            egui::Stroke::new(0.5_f32, grid),
         );
         let value = min + (max - min) * fraction as f64;
         painter.text(
@@ -602,7 +602,7 @@ fn show_time_series_values(
         if pair[1].captured_at.duration_since(pair[0].captured_at) <= config.max_gap {
             painter.line_segment(
                 [position(pair[0]), position(pair[1])],
-                egui::Stroke::new(2.0, config.color),
+                egui::Stroke::new(2.0_f32, config.color),
             );
         }
     }

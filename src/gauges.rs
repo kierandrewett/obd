@@ -121,7 +121,7 @@ impl<'a> RadialGauge<'a> {
 
         // Background circle
         painter.circle_filled(center, radius + 3.0, tc.gauge_bg);
-        painter.circle_stroke(center, radius + 3.0, Stroke::new(1.5, tc.gauge_border));
+        painter.circle_stroke(center, radius + 3.0, Stroke::new(1.5_f32, tc.gauge_border));
 
         // Arc parameters: sweep from 225 degrees to -45 degrees (270 degree arc)
         let start_angle = 225.0_f32.to_radians();
@@ -281,7 +281,7 @@ impl<'a> RadialGauge<'a> {
             } else {
                 tc.tick_minor
             };
-            let width = if is_major { 2.0 } else { 1.0 };
+            let width = if is_major { 2.0_f32 } else { 1.0_f32 };
             painter.line_segment([p1, p2], Stroke::new(width, tick_color));
 
             // Major tick labels
@@ -328,9 +328,9 @@ impl<'a> RadialGauge<'a> {
         let shadow_tip = Pos2::new(needle_tip.x + 1.0, needle_tip.y + 1.0);
         painter.line_segment(
             [Pos2::new(center.x + 1.0, center.y + 1.0), shadow_tip],
-            Stroke::new(3.0, tc.needle_shadow),
+            Stroke::new(3.0_f32, tc.needle_shadow),
         );
-        painter.line_segment([center, needle_tip], Stroke::new(2.0, needle_color));
+        painter.line_segment([center, needle_tip], Stroke::new(2.0_f32, needle_color));
         // Center cap
         painter.circle_filled(center, 5.0, tc.center_cap);
         painter.circle_filled(center, 3.0, needle_color);

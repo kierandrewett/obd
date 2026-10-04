@@ -1127,7 +1127,7 @@ mod tests {
         let crc_offset = malformed_crc.rfind('*').unwrap() + 1;
         malformed_crc.replace_range(crc_offset..crc_offset + 1, "G");
         assert!(parse_line(malformed_crc.as_bytes()).is_none());
-        assert!(parse_line(record[..crc_offset - 1].as_bytes()).is_none());
+        assert!(parse_line(&record.as_bytes()[..crc_offset - 1]).is_none());
         let mut extra_crc = record.clone();
         extra_crc.push('0');
         assert!(parse_line(extra_crc.as_bytes()).is_none());
