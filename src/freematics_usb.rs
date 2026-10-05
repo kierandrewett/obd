@@ -962,6 +962,12 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     fn pty_device() -> (FreematicsUsb, std::fs::File) {
+        let (device, master, _) = pty_device_with_path();
+        (device, master)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn pty_device_with_path() -> (FreematicsUsb, std::fs::File, String) {
         use std::os::fd::FromRawFd;
 
         let mut master = -1;
@@ -996,7 +1002,11 @@ mod tests {
         // SAFETY: master is a newly allocated descriptor from openpty and is
         // now owned by this File.
         let master = unsafe { std::fs::File::from_raw_fd(master) };
-        (FreematicsUsb::from_port(port), master)
+        (
+            FreematicsUsb::from_port(port),
+            master,
+            path.to_string_lossy().into_owned(),
+        )
     }
 
     #[cfg(target_os = "linux")]
@@ -1028,6 +1038,71 @@ mod tests {
         assert_eq!(frame.corrupt_records, 0);
         assert_eq!(device.baud_rate(), 460_800);
         assert_eq!(device.port.baud_rate().unwrap(), 460_800);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn reopens_after_serial_disconnect_and_parses_fresh_telemetry() {
+        use std::io::Write;
+        use std::os::unix::fs::symlink;
+
+        let (initial_device, mut master, initial_path) = pty_device_with_path();
+        drop(initial_device);
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let link_directory = std::env::temp_dir().join(format!(
+            "obd-freematics-reconnect-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&link_directory).unwrap();
+        let selected_port = link_directory.join("ttyFreematics");
+        symlink(&initial_path, &selected_port).unwrap();
+        let selected_port = selected_port.to_string_lossy().into_owned();
+        let mut device = FreematicsUsb::reconnect_known_port(&selected_port).unwrap();
+        let old_record = wire_record(41_000, 900.0, 3, "0C");
+        master
+            .write_all(&old_record.as_bytes()[..old_record.len() / 2])
+            .unwrap();
+        assert!(device.read_frames().unwrap().is_empty());
+        drop(master);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut disconnected = false;
+        while Instant::now() < deadline {
+            if device.read_frames().is_err() {
+                disconnected = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            disconnected,
+            "closing the PTY peer must surface a read error"
+        );
+
+        drop(device);
+        let (temporary_device, mut master, path) = pty_device_with_path();
+        // Replace the PTY behind the same selected path, as Linux does when a
+        // USB serial device returns on its original /dev/tty name.
+        drop(temporary_device);
+        std::fs::remove_file(&selected_port).unwrap();
+        symlink(&path, &selected_port).unwrap();
+        let mut reconnected = FreematicsUsb::reconnect_known_port(&selected_port)
+            .expect("reopen the same selected serial path after reconnect");
+        master
+            .write_all(wire_record(42_123, 602.5, 7, "0C,0D").as_bytes())
+            .unwrap();
+
+        let frame = read_pty_frame(&mut reconnected);
+        assert_eq!(frame.capture_ms, 42_123);
+        let measurements = frame.measurements();
+        assert_eq!(measurements.len(), 1);
+        assert_eq!(measurements[0].cmd, "010C");
+        assert_eq!(measurements[0].value, 602.5);
+        assert_eq!(frame.corrupt_records, 0);
+        std::fs::remove_file(&selected_port).unwrap();
+        std::fs::remove_dir(link_directory).unwrap();
     }
 
     #[cfg(target_os = "linux")]
