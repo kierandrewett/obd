@@ -87,6 +87,9 @@ pub struct FreematicsFrame {
     /// includes time spent waiting for UI processing.
     pub reader_received_at: Instant,
     pub capture_utc_ms: Option<i64>,
+    /// Optional durable sample sequence supplied by newer FT2 firmware.
+    /// Older FT1/FT2 records do not carry this metadata.
+    pub capture_sequence: Option<u64>,
     pub dropped_records: u32,
     /// `None` means firmware has not reported a support result. An explicit
     /// `-` metadata marker means the scan completed and found no supported PIDs.
@@ -579,6 +582,8 @@ pub fn parse_line(line: &[u8]) -> Option<FreematicsFrame> {
     let mut raw_mode01 = None;
     let mut raw_mode01_seen = false;
     let mut raw_mode01_invalid = false;
+    let mut capture_sequence = None;
+    let mut capture_sequence_seen = false;
     for item in suffix {
         if let Some(value) = item.strip_prefix("vin=") {
             if vin.is_some()
@@ -610,6 +615,12 @@ pub fn parse_line(line: &[u8]) -> Option<FreematicsFrame> {
                     None => raw_mode01_invalid = true,
                 }
             }
+        } else if let Some(value) = item.strip_prefix("seq=") {
+            if !version2 || capture_sequence_seen {
+                return None;
+            }
+            capture_sequence_seen = true;
+            capture_sequence = Some(value.parse::<u64>().ok()?);
         }
     }
     let supported_pids = if supported_text.is_empty() {
@@ -681,6 +692,7 @@ pub fn parse_line(line: &[u8]) -> Option<FreematicsFrame> {
         capture_ms,
         reader_received_at,
         capture_utc_ms,
+        capture_sequence,
         dropped_records,
         supported_pids,
         raw_mode01: if raw_mode01_invalid {
@@ -1135,6 +1147,52 @@ mod tests {
         let mut crlf_parser = FreematicsParser::default();
         let frames = crlf_parser.feed(format!("{record}\r\n").as_bytes());
         assert_eq!(frames.len(), 1);
+    }
+
+    #[test]
+    fn parses_optional_ft2_capture_sequence_and_preserves_legacy_records() {
+        let payload = "ABCDEF#0:1200,10C:718.5,40C:125,24:1375";
+        let with_sequence = wire_record_v2(
+            "42,1200,1,1790966400000,7,0C,0D;seq=18446744073709551615",
+            payload,
+        );
+        assert_eq!(
+            parse_line(with_sequence.as_bytes())
+                .expect("FT2 with sequence")
+                .capture_sequence,
+            Some(u64::MAX)
+        );
+
+        let older_ft2 = wire_record_v2("42,1200,1,1790966400000,7,0C,0D", payload);
+        assert_eq!(
+            parse_line(older_ft2.as_bytes())
+                .expect("legacy FT2 without sequence")
+                .capture_sequence,
+            None
+        );
+        let legacy_ft1 = wire_record(1200, 718.5, 125, "0C,0D");
+        assert_eq!(
+            parse_line(legacy_ft1.trim_end().as_bytes())
+                .expect("legacy FT1")
+                .capture_sequence,
+            None
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_or_duplicate_ft2_capture_sequence() {
+        let payload = "ABCDEF#0:1200,10C:718.5,40C:125,24:1375";
+        for metadata in [
+            "42,1200,1,1790966400000,7,0C;seq=",
+            "42,1200,1,1790966400000,7,0C;seq=-1",
+            "42,1200,1,1790966400000,7,0C;seq=18446744073709551616",
+            "42,1200,1,1790966400000,7,0C;seq=1;seq=2",
+        ] {
+            assert!(
+                parse_line(wire_record_v2(metadata, payload).as_bytes()).is_none(),
+                "accepted invalid sequence metadata: {metadata}"
+            );
+        }
     }
 
     #[test]

@@ -617,6 +617,7 @@ mod telemetry_reader_drop_tests {
             capture_ms: 0,
             reader_received_at: std::time::Instant::now(),
             capture_utc_ms: None,
+            capture_sequence: None,
             dropped_records: 0,
             supported_pids: Some(HashSet::new()),
             raw_mode01: HashMap::new(),

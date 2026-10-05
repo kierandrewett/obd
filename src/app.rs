@@ -3486,6 +3486,7 @@ mod adapter_ui_tests {
             capture_ms: 1_250,
             reader_received_at: Instant::now(),
             capture_utc_ms: Some(1_790_966_400_000),
+            capture_sequence: None,
             dropped_records: 0,
             supported_pids: Some(HashSet::from([0x0C, 0x0D])),
             raw_mode01: HashMap::new(),
@@ -3676,6 +3677,7 @@ mod adapter_ui_tests {
             capture_ms: 1_250,
             reader_received_at: Instant::now(),
             capture_utc_ms: None,
+            capture_sequence: None,
             dropped_records: 0,
             supported_pids: Some(HashSet::new()),
             raw_mode01: HashMap::new(),
@@ -3719,6 +3721,7 @@ mod adapter_ui_tests {
             capture_ms: 1000,
             reader_received_at: Instant::now(),
             capture_utc_ms: None,
+            capture_sequence: None,
             dropped_records: 0,
             supported_pids: Some(HashSet::from([0x01, 0x04, 0x14])),
             raw_mode01: HashMap::from([
