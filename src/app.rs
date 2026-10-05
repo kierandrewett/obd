@@ -448,6 +448,14 @@ struct LivePidState {
     capture_ms: Option<u32>,
 }
 
+fn live_pid_value_text(state: &LivePidState) -> String {
+    if state.supported == Some(false) {
+        "Unsupported".to_string()
+    } else {
+        state.value.to_string()
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct HistoryPoint {
     captured_at: Instant,
@@ -2417,7 +2425,7 @@ impl ObdApp {
                                 ui.label(&state.name);
                             });
                             row.col(|ui| {
-                                ui.label(RichText::new(format!("{}", state.value)).strong());
+                                ui.label(RichText::new(live_pid_value_text(state)).strong());
                             });
                             row.col(|ui| {
                                 ui.label(RichText::new(&state.unit).color(Color32::from_gray(140)));
@@ -3348,6 +3356,31 @@ mod adapter_ui_tests {
             Some(Duration::from_millis(100))
         );
         assert_eq!(should_request_live_repaint(false, false, false), None);
+    }
+
+    #[test]
+    fn sensor_value_does_not_render_placeholder_zero_for_confirmed_unsupported_pid() {
+        let now = Instant::now();
+        let state = LivePidState {
+            name: "Engine RPM".into(),
+            value: ObdValue::Numeric(0.0),
+            unit: "RPM".into(),
+            numeric_value: 0.0,
+            history: Vec::new(),
+            raw: String::new(),
+            age_ms: None,
+            supported: Some(false),
+            received_at: now,
+            capture_ms: Some(1),
+        };
+        assert_eq!(live_pid_value_text(&state), "Unsupported");
+
+        let mut unknown = state;
+        unknown.supported = None;
+        assert_eq!(live_pid_value_text(&unknown), "0.00");
+        unknown.supported = Some(true);
+        unknown.value = ObdValue::Numeric(812.5);
+        assert_eq!(live_pid_value_text(&unknown), "812.50");
     }
 
     #[test]
