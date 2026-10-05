@@ -140,6 +140,7 @@ pub enum PollMode {
 #[derive(Debug, Clone)]
 pub enum ObdEvent {
     Connecting(String),
+    Reconnecting(String),
     Connected(ConnectionInfo),
     ConnectionFailed(String),
     Disconnected,
@@ -195,6 +196,7 @@ pub struct ObdApp {
     // Connection state
     connected: bool,
     connecting: bool,
+    reconnecting: bool,
     connection_info: Option<ConnectionInfo>,
     connection_status: String,
 
@@ -699,6 +701,7 @@ impl ObdApp {
             freematics_rx,
             connected: false,
             connecting: false,
+            reconnecting: false,
             connection_info: None,
             connection_status: "Disconnected".to_string(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -793,6 +796,7 @@ impl ObdApp {
         while let Ok(event) = self.event_rx.try_recv() {
             match event {
                 ObdEvent::Connecting(msg) => {
+                    self.reconnecting = false;
                     if !self.connecting {
                         self.connected = false;
                         self.live_running = false;
@@ -847,6 +851,7 @@ impl ObdApp {
                 ObdEvent::Connected(info) => {
                     self.connected = true;
                     self.connecting = false;
+                    self.reconnecting = false;
                     self.connection_status = if info.baud == 0 {
                         format!("Connected: {} | {}", info.port, info.protocol)
                     } else {
@@ -864,12 +869,14 @@ impl ObdApp {
                 ObdEvent::ConnectionFailed(msg) => {
                     self.connected = false;
                     self.connecting = false;
+                    self.reconnecting = false;
                     self.connection_status = format!("Failed: {msg}");
                     self.add_log(&format!("[CONNECT_FAILED] {msg}"));
                 }
                 ObdEvent::Disconnected => {
                     self.connected = false;
                     self.connecting = false;
+                    self.reconnecting = false;
                     self.live_running = false;
                     self.connection_info = None;
                     #[cfg(not(target_arch = "wasm32"))]
@@ -903,6 +910,13 @@ impl ObdApp {
                     self.connection_status = "Disconnected".to_string();
                     self.release_wake_lock();
                     self.add_log("[DISCONNECTED]");
+                }
+                ObdEvent::Reconnecting(msg) => {
+                    self.connected = false;
+                    self.connecting = false;
+                    self.reconnecting = true;
+                    self.connection_status = msg.clone();
+                    self.add_log(&format!("[RECONNECTING] {msg}"));
                 }
                 ObdEvent::LiveData {
                     pid_cmd,
@@ -1587,6 +1601,8 @@ impl ObdApp {
             // Status indicator
             let (status_color, status_text) = if self.connected {
                 (Color32::from_rgb(50, 200, 80), "Connected")
+            } else if self.reconnecting {
+                (Color32::from_rgb(220, 180, 50), "Reconnecting...")
             } else if self.connecting {
                 (Color32::from_rgb(220, 180, 50), "Connecting...")
             } else {
@@ -3356,6 +3372,39 @@ mod adapter_ui_tests {
             Some(Duration::from_millis(100))
         );
         assert_eq!(should_request_live_repaint(false, false, false), None);
+    }
+
+    #[test]
+    fn freematics_reconnecting_is_distinct_from_fresh_connected_state() {
+        let (commands, _command_rx) = mpsc::channel();
+        let (events, event_rx) = mpsc::channel();
+        let (_telemetry_tx, telemetry_rx) = mpsc::channel();
+        let mut app = ObdApp::new_state(commands, event_rx, telemetry_rx, None);
+        app.connection_kind = ConnectionKind::FreematicsUsb;
+        app.connected = true;
+        app.connection_info = Some(ConnectionInfo {
+            port: "/dev/ttyUSB-known-model-b".into(),
+            baud: 500_000,
+            protocol: "Freematics Telemetry v2".into(),
+            elm_version: "Passive stream".into(),
+            voltage: None,
+        });
+
+        events
+            .send(ObdEvent::Reconnecting(
+                "Freematics USB read failed; retrying selected port".into(),
+            ))
+            .unwrap();
+        app.process_events();
+
+        assert!(!app.connected);
+        assert!(!app.connecting);
+        assert!(app.reconnecting);
+        assert!(app.connection_status.contains("retrying"));
+        assert_eq!(
+            should_request_live_repaint(false, false, app.is_freematics_usb() && app.connected),
+            None
+        );
     }
 
     #[test]

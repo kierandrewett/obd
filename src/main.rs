@@ -168,6 +168,66 @@ enum TelemetryEnqueueResult {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+const FREEMATICS_RECONNECT_BASE: Duration = Duration::from_millis(250);
+#[cfg(not(target_arch = "wasm32"))]
+const FREEMATICS_RECONNECT_MAX: Duration = Duration::from_secs(4);
+
+/// Retry state for the already-identified Model B port. No port discovery is
+/// performed during recovery; a user connection/switch cancels this state.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct FreematicsReconnect {
+    port: Option<String>,
+    attempt: u32,
+    retry_at: Option<std::time::Instant>,
+    info: Option<elm327::ConnectionInfo>,
+    awaiting_frame: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl FreematicsReconnect {
+    fn cancel(&mut self) {
+        *self = Self::default();
+    }
+
+    fn remember(&mut self, info: elm327::ConnectionInfo) {
+        self.port = Some(info.port.clone());
+        self.info = Some(info);
+        self.awaiting_frame = true;
+        self.retry_at = None;
+        self.attempt = 0;
+    }
+
+    fn schedule(&mut self, now: std::time::Instant) -> Duration {
+        let shift = self.attempt.min(4);
+        let delay = FREEMATICS_RECONNECT_BASE
+            .saturating_mul(1u32 << shift)
+            .min(FREEMATICS_RECONNECT_MAX);
+        self.attempt = self.attempt.saturating_add(1);
+        self.retry_at = Some(now + delay);
+        delay
+    }
+
+    fn due(&self, now: std::time::Instant) -> bool {
+        self.port.is_some() && self.retry_at.is_some_and(|at| now >= at)
+    }
+
+    fn opened(&mut self) {
+        self.retry_at = None;
+        self.awaiting_frame = true;
+    }
+
+    fn valid_frame(&mut self) -> Option<elm327::ConnectionInfo> {
+        if !self.awaiting_frame {
+            return None;
+        }
+        self.awaiting_frame = false;
+        self.attempt = 0;
+        self.info.clone()
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn enqueue_telemetry_frame(
     mut frame: freematics_usb::FreematicsFrame,
     telemetry_tx: &mpsc::SyncSender<freematics_usb::FreematicsFrame>,
@@ -234,6 +294,7 @@ fn obd_worker(
     let mut elm: Option<AnyAdapter> = None;
     let mut freematics: Option<freematics_usb::FreematicsUsb> = None;
     let mut freematics_pending_connection: Option<elm327::ConnectionInfo> = None;
+    let mut freematics_reconnect = FreematicsReconnect::default();
     let mut reader_drops = TelemetryReaderDropCounter::default();
     let mut live_running = false;
     let mut poll_config = PollConfig::default();
@@ -263,6 +324,7 @@ fn obd_worker(
                     elm = None;
                     freematics = None;
                     freematics_pending_connection = None;
+                    freematics_reconnect.cancel();
                     live_running = false;
                     current_make = None;
                     let _ =
@@ -292,6 +354,7 @@ fn obd_worker(
                     elm = None;
                     freematics = None;
                     freematics_pending_connection = None;
+                    freematics_reconnect.cancel();
                     live_running = false;
                     current_make = None;
                     let _ = event_tx.send(ObdEvent::Connecting("Connecting to adapter...".into()));
@@ -320,6 +383,7 @@ fn obd_worker(
                     elm = None;
                     freematics = None;
                     freematics_pending_connection = None;
+                    freematics_reconnect.cancel();
                     live_running = false;
                     current_make = None;
                     let _ = event_tx.send(ObdEvent::Connecting(
@@ -345,10 +409,16 @@ fn obd_worker(
                                 info.port
                             )));
                             freematics_pending_connection = Some(info);
+                            if let Some(info) = freematics_pending_connection.as_ref() {
+                                freematics_reconnect.remember(info.clone());
+                            }
                             freematics = Some(device);
                             reader_drops.reset();
                             for frame in initial_frames {
-                                if let Some(info) = freematics_pending_connection.take() {
+                                if let Some(info) = freematics_reconnect.valid_frame() {
+                                    freematics_pending_connection = None;
+                                    let _ = event_tx.send(ObdEvent::Connected(info));
+                                } else if let Some(info) = freematics_pending_connection.take() {
                                     let _ = event_tx.send(ObdEvent::Connected(info));
                                 }
                                 let _ = enqueue_telemetry_frame(
@@ -368,6 +438,7 @@ fn obd_worker(
                     elm = None;
                     freematics = None;
                     freematics_pending_connection = None;
+                    freematics_reconnect.cancel();
                     live_running = false;
                     let _ = event_tx.send(ObdEvent::Disconnected);
                 }
@@ -444,6 +515,7 @@ fn obd_worker(
                     elm = None;
                     freematics = None;
                     freematics_pending_connection = None;
+                    freematics_reconnect.cancel();
                     live_running = false;
                     current_make = None;
                     #[cfg(debug_assertions)]
@@ -484,12 +556,39 @@ fn obd_worker(
             }
         }
 
+        // Reopen only the port whose Model B identity was established by the
+        // explicit/auto connection path. Parser state is fresh in each device.
+        if freematics.is_none() && freematics_reconnect.due(std::time::Instant::now()) {
+            if let Some(port) = freematics_reconnect.port.clone() {
+                match freematics_usb::FreematicsUsb::reconnect_known_port(&port) {
+                    Ok(device) => {
+                        freematics_reconnect.opened();
+                        freematics_pending_connection = freematics_reconnect.info.clone();
+                        freematics = Some(device);
+                        let _ = event_tx.send(ObdEvent::Reconnecting(format!(
+                            "Reopened {port}; waiting for a valid telemetry frame"
+                        )));
+                    }
+                    Err(error) => {
+                        let delay = freematics_reconnect.schedule(std::time::Instant::now());
+                        let _ = event_tx.send(ObdEvent::Reconnecting(format!(
+                            "Freematics USB reconnecting on {port} in {:.2}s ({error})",
+                            delay.as_secs_f32()
+                        )));
+                    }
+                }
+            }
+        }
+
         let mut telemetry_receiver_closed = false;
         if let Some(device) = &mut freematics {
             match device.read_frames() {
                 Ok(frames) => {
                     for frame in frames {
-                        if let Some(info) = freematics_pending_connection.take() {
+                        if let Some(info) = freematics_reconnect.valid_frame() {
+                            freematics_pending_connection = None;
+                            let _ = event_tx.send(ObdEvent::Connected(info));
+                        } else if let Some(info) = freematics_pending_connection.take() {
                             let _ = event_tx.send(ObdEvent::Connected(info));
                         }
                         match enqueue_telemetry_frame(frame, &telemetry_tx, &mut reader_drops) {
@@ -502,15 +601,25 @@ fn obd_worker(
                     }
                 }
                 Err(error) => {
-                    if freematics_pending_connection.take().is_some() {
-                        let _ = event_tx.send(ObdEvent::ConnectionFailed(format!(
-                            "Freematics port opened but telemetry read failed: {error}"
+                    let port = freematics.as_ref().map(|device| device.port_name());
+                    freematics = None;
+                    if let Some(port) = port {
+                        if freematics_reconnect.port.as_deref() != Some(port.as_str()) {
+                            if let Some(info) = freematics_pending_connection
+                                .clone()
+                                .or_else(|| freematics_reconnect.info.clone())
+                            {
+                                freematics_reconnect.remember(info);
+                            }
+                        }
+                        let delay = freematics_reconnect.schedule(std::time::Instant::now());
+                        let _ = event_tx.send(ObdEvent::Reconnecting(format!(
+                            "Freematics USB read failed; retrying {port} in {:.2}s ({error})",
+                            delay.as_secs_f32()
                         )));
                     } else {
-                        let _ = event_tx.send(ObdEvent::Error(error));
-                        let _ = event_tx.send(ObdEvent::Disconnected);
+                        telemetry_receiver_closed = true;
                     }
-                    telemetry_receiver_closed = true;
                 }
             }
         }
@@ -538,6 +647,70 @@ fn obd_worker(
                 }
             }
         }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod freematics_reconnect_tests {
+    use super::*;
+
+    fn info(port: &str) -> elm327::ConnectionInfo {
+        elm327::ConnectionInfo {
+            port: port.to_string(),
+            baud: 500_000,
+            protocol: "Freematics Telemetry v2".into(),
+            elm_version: "Passive stream".into(),
+            voltage: None,
+        }
+    }
+
+    #[test]
+    fn retry_delay_is_bounded_exponential_and_only_due_after_deadline() {
+        let now = std::time::Instant::now();
+        let mut retry = FreematicsReconnect::default();
+        retry.remember(info("/dev/ttyUSB-known-model-b"));
+
+        assert_eq!(retry.schedule(now), Duration::from_millis(250));
+        assert!(!retry.due(now + Duration::from_millis(249)));
+        assert!(retry.due(now + Duration::from_millis(250)));
+        assert_eq!(retry.schedule(now), Duration::from_millis(500));
+        assert_eq!(retry.schedule(now), Duration::from_secs(1));
+        assert_eq!(retry.schedule(now), Duration::from_secs(2));
+        assert_eq!(retry.schedule(now), Duration::from_secs(4));
+        assert_eq!(retry.schedule(now), FREEMATICS_RECONNECT_MAX);
+    }
+
+    #[test]
+    fn error_retry_recovers_only_after_valid_frame() {
+        let now = std::time::Instant::now();
+        let mut retry = FreematicsReconnect::default();
+        retry.remember(info("/dev/ttyUSB-known-model-b"));
+        retry.schedule(now);
+        assert!(retry.due(now + FREEMATICS_RECONNECT_BASE));
+
+        retry.opened();
+        assert!(retry.awaiting_frame);
+        assert!(retry.retry_at.is_none());
+        let restored = retry
+            .valid_frame()
+            .expect("valid telemetry restores connection");
+        assert_eq!(restored.port, "/dev/ttyUSB-known-model-b");
+        assert!(!retry.awaiting_frame);
+        assert!(retry.valid_frame().is_none());
+    }
+
+    #[test]
+    fn explicit_disconnect_or_adapter_switch_cancels_pending_retry() {
+        let now = std::time::Instant::now();
+        let mut retry = FreematicsReconnect::default();
+        retry.remember(info("/dev/ttyUSB-known-model-b"));
+        retry.schedule(now);
+        retry.cancel();
+
+        assert!(!retry.due(now + Duration::from_secs(60)));
+        assert!(retry.port.is_none());
+        assert!(retry.info.is_none());
+        assert!(retry.valid_frame().is_none());
     }
 }
 

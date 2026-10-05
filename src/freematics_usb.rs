@@ -811,6 +811,17 @@ impl FreematicsUsb {
             ));
         }
 
+        Self::open_known_port(port_name)
+    }
+
+    /// Reopen a port that was previously verified as the Freematics Model B
+    /// CP210x bridge. This deliberately does not enumerate or probe other
+    /// serial ports after an explicit connection has been selected.
+    pub fn reconnect_known_port(port_name: &str) -> Result<Self, String> {
+        Self::open_known_port(port_name)
+    }
+
+    fn open_known_port(port_name: &str) -> Result<Self, String> {
         let port = serialport::new(port_name, USB_BAUD)
             .timeout(Duration::from_millis(75))
             .preserve_dtr_on_open()
