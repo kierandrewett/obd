@@ -89,6 +89,7 @@ pub enum OdbCmd {
     #[cfg(not(target_arch = "wasm32"))]
     ConnectAdapter(NativeConnection),
     /// Connect to a local OBD emulator via WebSocket (web only).
+    #[cfg(any(target_arch = "wasm32", debug_assertions))]
     ConnectLocal {
         ws_port: u16,
     },
@@ -218,6 +219,7 @@ pub struct ObdApp {
     selected_baud: Option<u32>,
     #[allow(dead_code)]
     auto_connect: bool,
+    #[cfg(any(target_arch = "wasm32", debug_assertions))]
     emulator_port: u16,
 
     // Live data
@@ -709,6 +711,7 @@ impl ObdApp {
             selected_port: None,
             selected_baud: None,
             auto_connect: true,
+            #[cfg(any(target_arch = "wasm32", debug_assertions))]
             emulator_port: 35000,
             live_data: HashMap::new(),
             live_running: false,

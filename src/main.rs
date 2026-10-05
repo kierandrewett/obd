@@ -439,6 +439,7 @@ fn obd_worker(
                     }
                 }
 
+                #[cfg(debug_assertions)]
                 OdbCmd::ConnectLocal { ws_port } => {
                     elm = None;
                     freematics = None;
